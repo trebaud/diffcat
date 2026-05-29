@@ -30,6 +30,9 @@ var (
 	selectedRowStyle lipgloss.Style
 	borderStyle      lipgloss.Style
 
+	dirStyle       lipgloss.Style // folder rows in the file tree
+	treeGuideStyle lipgloss.Style // the faint │ rails connecting tree levels
+
 	addedStyle   lipgloss.Style
 	removedStyle lipgloss.Style
 	metaStyle    lipgloss.Style
@@ -68,6 +71,11 @@ func ApplyTheme(isDark bool) {
 	// color alone — the ▸ caret marks the row too.
 	selectedRowStyle = lipgloss.NewStyle().Background(colRowBg).Foreground(colAccent).Bold(true)
 	borderStyle = lipgloss.NewStyle().Foreground(colBorder)
+
+	// Folders read in the cyan "meta" tone (distinct from the magenta selection
+	// accent); the tree rails are as faint as the pane divider.
+	dirStyle = lipgloss.NewStyle().Foreground(colMeta).Bold(true)
+	treeGuideStyle = lipgloss.NewStyle().Foreground(colBorder)
 
 	addedStyle = lipgloss.NewStyle().Foreground(colAdded)
 	removedStyle = lipgloss.NewStyle().Foreground(colRemoved)

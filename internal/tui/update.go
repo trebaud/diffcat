@@ -87,8 +87,13 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "l", "right":
 		m.focus = focusDiff
 		return m, nil
-	case "enter":
-		// Open the selected file's diff and move into it.
+	case "enter", "o":
+		// On a folder: fold/unfold it. On a file: open its diff and move into
+		// the diff pane.
+		if r := m.selectedRow(); r != nil && r.isDir {
+			m.toggleCollapse()
+			return m, nil
+		}
 		m.focus = focusDiff
 		return m, nil
 
@@ -160,7 +165,7 @@ func (m *model) gotoTop() {
 
 func (m *model) gotoBottom() {
 	if m.focus == focusFiles {
-		m.cursor = max(0, len(m.files)-1)
+		m.cursor = max(0, len(m.rows)-1)
 		m.loadDiff()
 		return
 	}
@@ -181,8 +186,8 @@ func (m *model) moveCursor(delta int) {
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
-	if m.cursor >= len(m.files) {
-		m.cursor = len(m.files) - 1
+	if m.cursor >= len(m.rows) {
+		m.cursor = len(m.rows) - 1
 	}
 	m.loadDiff()
 }
@@ -193,9 +198,7 @@ func (m *model) refresh() {
 	m.base = git.MergeBase(m.repo, m.baseName)
 	if files, err := git.ChangedFiles(m.repo, m.base); err == nil {
 		m.files = files
-		if m.cursor >= len(m.files) {
-			m.cursor = max(0, len(m.files)-1)
-		}
+		m.rebuildTree()
 	}
 	m.shortstat = git.Shortstat(m.repo, m.base)
 	m.loadDiff()

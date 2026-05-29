@@ -35,8 +35,16 @@ func sampleModel() model {
 			{Path: "assets/logo.png", Status: "A", Added: -1, Deleted: -1},
 			{Path: "old.txt", Status: "D", Added: 0, Deleted: 9},
 		},
-		cursor: 1,
-		focus:  focusFiles,
+		focus: focusFiles,
+	}
+	m.rebuildTree()
+	// Park the cursor on a file row (not a folder) so the diff pane renders a
+	// real diff in the focused-diff tests.
+	for i, r := range m.rows {
+		if r.file != nil {
+			m.cursor = i
+			break
+		}
 	}
 	m.diff = diff.Parse(sampleRaw)
 	m.splitRows = diff.SplitRows(m.diff)

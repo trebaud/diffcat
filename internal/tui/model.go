@@ -31,8 +31,15 @@ type model struct {
 	branch    string // current branch
 	shortstat string
 
-	files  []git.FileChange
-	cursor int // index into files
+	files []git.FileChange // raw change list, source of truth for the tree
+
+	// The file list renders as a collapsible tree. rows is the flattened set of
+	// visible lines (folders + files, collapsed branches omitted); cursor indexes
+	// into it. collapsed remembers which folder paths are folded, surviving a
+	// rebuild so a refresh doesn't re-expand everything.
+	rows      []treeRow
+	cursor    int
+	collapsed map[string]bool
 
 	// Parsed diff for the selected file, plus the side-by-side projection and
 	// the scroll position. lineDigits sizes the line-number gutter.
@@ -59,17 +66,55 @@ func newModel(repo, base, baseName, branch string, files []git.FileChange, short
 		branch:    branch,
 		shortstat: shortstat,
 		files:     files,
+		collapsed: map[string]bool{},
 	}
+	m.rebuildTree()
 	m.loadDiff()
 	return m
 }
 
+// rebuildTree regenerates the flattened tree rows from the current file list,
+// preserving folded folders. It clamps the cursor so it never dangles past the
+// (possibly shorter) row set after files change.
+func (m *model) rebuildTree() {
+	if m.collapsed == nil {
+		m.collapsed = map[string]bool{}
+	}
+	m.rows = nil
+	flattenTree(buildTree(m.files), m.collapsed, 0, nil, &m.rows)
+	if m.cursor >= len(m.rows) {
+		m.cursor = max(0, len(m.rows)-1)
+	}
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+}
+
+// selectedRow returns the row under the cursor, or nil when the tree is empty.
+func (m model) selectedRow() *treeRow {
+	if m.cursor >= 0 && m.cursor < len(m.rows) {
+		return &m.rows[m.cursor]
+	}
+	return nil
+}
+
+// toggleCollapse folds or unfolds the directory under the cursor and rebuilds.
+func (m *model) toggleCollapse() {
+	r := m.selectedRow()
+	if r == nil || !r.isDir {
+		return
+	}
+	m.collapsed[r.path] = !m.collapsed[r.path]
+	m.rebuildTree()
+}
+
 func (m model) Init() tea.Cmd { return tickCmd() }
 
-// selectedFile returns the file under the cursor, or nil when the diff is empty.
+// selectedFile returns the file under the cursor, or nil when the cursor is on a
+// folder row (or the tree is empty) — those have no diff to show.
 func (m model) selectedFile() *git.FileChange {
-	if m.cursor >= 0 && m.cursor < len(m.files) {
-		return &m.files[m.cursor]
+	if r := m.selectedRow(); r != nil {
+		return r.file
 	}
 	return nil
 }

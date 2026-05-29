@@ -28,11 +28,20 @@ auto-detected base branch.
   typed, line-numbered `Line`s (Context/Add/Del/Hunk/Meta); `SplitRows` pairs
   each removal block with the additions that follow for the side-by-side view.
   No rendering — the TUI styles these.
-- `tui/` — Bubble Tea (Elm architecture) viewer. Two panes: file list (left),
+- `tui/` — Bubble Tea (Elm architecture) viewer. Two panes: file tree (left),
   diff (right). Diff scrolling is tracked manually via `diffOffset` rather than
   a viewport component.
   - `model.go` state/helpers, `update.go` key handling, `view.go` rendering,
-    `theme.go` semantic colors with light/dark detection.
+    `theme.go` semantic colors with light/dark detection, `tree.go` the file-tree
+    model.
+  - The left pane is a collapsible file tree (`tree.go`): the flat `files` list
+    builds a `treeNode` tree, single-child folder chains are compressed
+    (`internal/tui/` on one row), and it flattens into `rows []treeRow` — the
+    visible lines (folders + files, collapsed branches omitted) the `cursor`
+    indexes into. Folders show chevrons, guide rails, and roll-up stats; `enter`/
+    `o` folds/unfolds the folder under the cursor (`collapsed` map survives a
+    refresh). `treeRow` (view.go) renders one line; selecting a folder shows a
+    roll-up in the diff pane instead of a diff.
   - Diffs render GitHub-style: full-row green/red background tints with
     line-number gutters (`renderUnifiedLine`). `s` toggles `splitView` for a
     side-by-side layout (`renderSplitRow`/`renderSplitSide`) fed by

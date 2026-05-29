@@ -9,7 +9,6 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/trebaud/diff-master/internal/diff"
-	"github.com/trebaud/diff-master/internal/git"
 )
 
 // View renders the full screen: a header bar, the file list beside the diff
@@ -121,70 +120,123 @@ func (m model) listView(width int) string {
 	b.WriteString(m.paneHeading(fmt.Sprintf("Changed files (%d)", len(m.files)), focusFiles))
 	b.WriteString("\n")
 
-	if len(m.files) == 0 {
+	if len(m.rows) == 0 {
 		b.WriteString(mutedStyle.Render("  no changes against base"))
 		return lipgloss.NewStyle().Width(width).Render(b.String())
 	}
 
-	// Scroll the list to keep the cursor visible.
+	// Scroll the tree to keep the cursor visible.
 	offset := 0
 	if m.cursor >= rows {
 		offset = m.cursor - rows + 1
 	}
 
 	end := offset + rows
-	if end > len(m.files) {
-		end = len(m.files)
+	if end > len(m.rows) {
+		end = len(m.rows)
 	}
 	for i := offset; i < end; i++ {
-		b.WriteString(m.fileRow(m.files[i], i == m.cursor, width))
+		b.WriteString(m.treeRow(m.rows[i], i == m.cursor, width))
 		b.WriteString("\n")
 	}
 	return lipgloss.NewStyle().Width(width).Render(b.String())
 }
 
-// fileRow renders one entry: "▸ M path/to/file.go        +12 -3", with the
-// stats flush-right and (when selected) a full-width highlight bar. We measure
-// with plain text so alignment is exact, then colorize per segment — except a
-// selected row, where the selection color intentionally overrides the syntax
-// colors so the cursor reads unambiguously.
-func (m model) fileRow(f git.FileChange, selected bool, width int) string {
-	glyph := statusGlyph(f.Status)
+// treeRow renders one line of the file tree — a folder ("▾ internal/tui  +42 -7")
+// or a file ("M view.go  +12 -3") — with guide rails for the ancestor levels, a
+// status/chevron glyph, the segment name, and stats flush-right. We lay it out in
+// plain text first so the columns align exactly, then colorize per segment; a
+// selected row drops the per-segment colors for one continuous highlight bar.
+func (m model) treeRow(r treeRow, selected bool, width int) string {
+	prefixW := 2 * len(r.guides)
 
-	statsPlain := "bin"
-	if !f.Binary() {
-		statsPlain = fmt.Sprintf("+%d -%d", f.Added, f.Deleted)
+	glyph := statusGlyph(r.status)
+	if r.isDir {
+		glyph = "▸"
+		if !r.collapsed {
+			glyph = "▾"
+		}
 	}
 
-	caret := "  "
-	if selected {
-		caret = "▸ "
+	// Folder names carry a trailing slash so a name collision with a file reads
+	// unambiguously.
+	label := r.name
+	if r.isDir {
+		label += "/"
 	}
 
-	// Layout budget: caret(2) + glyph(1) + space(1) + name + gap + stats.
-	avail := width - 2 - 1 - 1 - lipgloss.Width(statsPlain) - 1
-	if avail < 4 {
-		avail = 4
+	statsPlain := ""
+	switch {
+	case r.isDir:
+		if r.added != 0 || r.deleted != 0 {
+			statsPlain = fmt.Sprintf("+%d -%d", r.added, r.deleted)
+		}
+	case r.binary:
+		statsPlain = "bin"
+	default:
+		statsPlain = fmt.Sprintf("+%d -%d", r.added, r.deleted)
 	}
-	name := truncatePath(f.Path, avail)
 
-	gap := width - 2 - 1 - 1 - lipgloss.Width(name) - lipgloss.Width(statsPlain)
+	// Layout budget: prefix + glyph(1) + space(1) + name + gap + stats.
+	statsW := lipgloss.Width(statsPlain)
+	avail := width - prefixW - 2 - statsW - 1
+	if avail < 3 {
+		avail = 3
+	}
+	name := truncateText(label, avail)
+
+	gap := width - prefixW - 2 - lipgloss.Width(name) - statsW
 	if gap < 1 {
 		gap = 1
 	}
 
 	if selected {
-		row := caret + glyph + " " + name + strings.Repeat(" ", gap) + statsPlain
+		row := treeGuidesPlain(r.guides) + glyph + " " + name + strings.Repeat(" ", gap) + statsPlain
 		return selectedRowStyle.Width(width).Render(row)
 	}
 
-	stats := mutedStyle.Render(statsPlain)
-	if !f.Binary() {
-		stats = addedStyle.Render(fmt.Sprintf("+%d", f.Added)) + " " +
-			removedStyle.Render(fmt.Sprintf("-%d", f.Deleted))
+	nameStyled := name
+	glyphStyled := statusStyle(r.status).Render(glyph)
+	if r.isDir {
+		nameStyled = dirStyle.Render(name)
+		glyphStyled = dirStyle.Render(glyph)
 	}
-	return caret + statusStyle(f.Status).Render(glyph) + " " +
-		name + strings.Repeat(" ", gap) + stats
+
+	stats := mutedStyle.Render(statsPlain)
+	if !r.isDir && !r.binary && statsPlain != "" {
+		stats = addedStyle.Render(fmt.Sprintf("+%d", r.added)) + " " +
+			removedStyle.Render(fmt.Sprintf("-%d", r.deleted))
+	}
+	return treeGuides(r.guides) + glyphStyled + " " +
+		nameStyled + strings.Repeat(" ", gap) + stats
+}
+
+// treeGuides draws the ancestor rails: a faint "│ " where a sibling still follows
+// at that level, blank where the branch has ended.
+func treeGuides(guides []bool) string {
+	var b strings.Builder
+	for _, hasNext := range guides {
+		if hasNext {
+			b.WriteString(treeGuideStyle.Render("│ "))
+		} else {
+			b.WriteString("  ")
+		}
+	}
+	return b.String()
+}
+
+// treeGuidesPlain is treeGuides without styling, for the selection bar (which
+// owns the whole row's color).
+func treeGuidesPlain(guides []bool) string {
+	var b strings.Builder
+	for _, hasNext := range guides {
+		if hasNext {
+			b.WriteString("│ ")
+		} else {
+			b.WriteString("  ")
+		}
+	}
+	return b.String()
 }
 
 // truncatePath keeps the filename visible by trimming the left (directory) side.
@@ -211,20 +263,27 @@ func (m model) diffView(width int) string {
 	var b strings.Builder
 
 	f := m.selectedFile()
-	if f == nil {
-		return lipgloss.NewStyle().Width(width).Render(mutedStyle.Render("Select a file to view its diff."))
-	}
 
-	// Heading: file path + a mode tag. paneHeading prepends a 2-col marker.
-	mode := ""
-	if m.splitView {
-		mode = " [split]"
+	// Heading + body depend on what's under the cursor: a file shows its diff, a
+	// folder shows a roll-up, and an empty tree shows a hint. Either way the body
+	// is padded to fill the pane so the nyan progress bar pins to the bottom.
+	var lines []string
+	switch {
+	case f != nil:
+		mode := ""
+		if m.splitView {
+			mode = " [split]"
+		}
+		title := truncatePath(f.Path, width-2-lipgloss.Width(mode)) + mode
+		b.WriteString(m.paneHeading(title, focusDiff))
+		lines = m.diffWindow(width, rows)
+	default:
+		title, body := m.noFileSelection(width)
+		b.WriteString(m.paneHeading(title, focusDiff))
+		lines = []string{body}
 	}
-	title := truncatePath(f.Path, width-2-lipgloss.Width(mode)) + mode
-	b.WriteString(m.paneHeading(title, focusDiff))
 	b.WriteString("\n")
 
-	lines := m.diffWindow(width, rows)
 	for _, l := range lines {
 		b.WriteString(l)
 		b.WriteString("\n")
@@ -237,6 +296,17 @@ func (m model) diffView(width int) string {
 	b.WriteString(m.nyanProgress(width))
 
 	return lipgloss.NewStyle().Width(width).Render(b.String())
+}
+
+// noFileSelection produces the diff-pane heading and body for when the cursor is
+// on a folder (a roll-up summary) or on nothing (an empty-tree hint).
+func (m model) noFileSelection(width int) (title, body string) {
+	r := m.selectedRow()
+	if r != nil && r.isDir {
+		title = truncatePath(r.path+"/", width-2)
+		return title, mutedStyle.Render(fmt.Sprintf("  folder — +%d -%d across its files", r.added, r.deleted))
+	}
+	return "diff", mutedStyle.Render("  Select a file to view its diff.")
 }
 
 // diffWindow renders the visible slice of diff rows for the current view mode.
@@ -427,7 +497,7 @@ func (m model) paneHeading(text string, pane focusPane) string {
 
 func (m model) footerView() string {
 	keys := []string{
-		"j/k move", "h/l ⇄ pane", "gg/G top/bot", "C-d/C-u half", "s split", "r refresh", "? help", "q quit",
+		"j/k move", "h/l ⇄ pane", "↵ open/fold", "gg/G top/bot", "C-d/C-u half", "s split", "r refresh", "? help", "q quit",
 	}
 	return mutedStyle.Render(strings.Join(keys, "  ·  "))
 }
@@ -439,7 +509,7 @@ func (m model) helpView() string {
 		headingStyle.Render("  panes"),
 		"  h / l        focus file list / diff pane",
 		"  Tab          toggle focused pane",
-		"  Enter        open diff of selected file",
+		"  Enter / o    open file's diff, or fold/unfold a folder",
 		"",
 		headingStyle.Render("  motions (act on the focused pane)"),
 		"  j / k        down / up one line",
