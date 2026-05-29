@@ -1,0 +1,179 @@
+package tui
+
+import (
+	tea "charm.land/bubbletea/v2"
+
+	"github.com/trebaud/diff-master/internal/git"
+)
+
+// Update is the Elm update function — it maps a message to the next model and
+// any side effects.
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.clampDiffOffset()
+		return m, nil
+
+	case tea.KeyPressMsg:
+		return m.handleKey(msg)
+	}
+	return m, nil
+}
+
+func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.showHelp {
+		// Any key dismisses the help overlay.
+		m.showHelp = false
+		m.pendingG = false
+		return m, nil
+	}
+
+	key := msg.String()
+
+	// `gg` chord: a pending `g` followed by another `g` jumps to the top of
+	// the focused pane. Any other key cancels the chord and is handled below.
+	if m.pendingG {
+		m.pendingG = false
+		if key == "g" {
+			m.gotoTop()
+			return m, nil
+		}
+	}
+
+	switch key {
+	case "q", "ctrl+c", "esc":
+		return m, tea.Quit
+
+	case "?":
+		m.showHelp = true
+		return m, nil
+
+	case "r":
+		m.refresh()
+		return m, nil
+
+	// --- pane focus (vim window motions) ---
+	case "tab":
+		m.toggleFocus()
+		return m, nil
+	case "h", "left":
+		m.focus = focusFiles
+		return m, nil
+	case "l", "right":
+		m.focus = focusDiff
+		return m, nil
+	case "enter":
+		// Open the selected file's diff and move into it.
+		m.focus = focusDiff
+		return m, nil
+
+	// --- motions within the focused pane ---
+	case "j", "down":
+		m.moveDown()
+		return m, nil
+	case "k", "up":
+		m.moveUp()
+		return m, nil
+	case "g":
+		m.pendingG = true // wait for the second `g`
+		return m, nil
+	case "G", "end":
+		m.gotoBottom()
+		return m, nil
+
+	// --- diff paging (always acts on the diff pane) ---
+	case "ctrl+d":
+		m.scrollDiff(m.diffViewportHeight() / 2)
+		return m, nil
+	case "ctrl+u":
+		m.scrollDiff(-m.diffViewportHeight() / 2)
+		return m, nil
+	case "ctrl+f", "pgdown", " ":
+		m.scrollDiff(m.diffViewportHeight())
+		return m, nil
+	case "ctrl+b", "pgup":
+		m.scrollDiff(-m.diffViewportHeight())
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m *model) toggleFocus() {
+	if m.focus == focusFiles {
+		m.focus = focusDiff
+	} else {
+		m.focus = focusFiles
+	}
+}
+
+// moveDown/moveUp dispatch j/k to the focused pane: file selection on the
+// left, line-wise diff scrolling on the right.
+func (m *model) moveDown() {
+	if m.focus == focusFiles {
+		m.moveCursor(1)
+	} else {
+		m.scrollDiff(1)
+	}
+}
+
+func (m *model) moveUp() {
+	if m.focus == focusFiles {
+		m.moveCursor(-1)
+	} else {
+		m.scrollDiff(-1)
+	}
+}
+
+func (m *model) gotoTop() {
+	if m.focus == focusFiles {
+		m.cursor = 0
+		m.loadDiff()
+		return
+	}
+	m.diffOffset = 0
+}
+
+func (m *model) gotoBottom() {
+	if m.focus == focusFiles {
+		m.cursor = max(0, len(m.files)-1)
+		m.loadDiff()
+		return
+	}
+	m.diffOffset = len(m.diffLines)
+	m.clampDiffOffset()
+}
+
+func (m *model) scrollDiff(delta int) {
+	m.diffOffset += delta
+	m.clampDiffOffset()
+}
+
+func (m *model) moveCursor(delta int) {
+	if len(m.files) == 0 {
+		return
+	}
+	m.cursor += delta
+	if m.cursor < 0 {
+		m.cursor = 0
+	}
+	if m.cursor >= len(m.files) {
+		m.cursor = len(m.files) - 1
+	}
+	m.loadDiff()
+}
+
+// refresh recomputes the base and reloads the changed-file list from disk so
+// the view reflects edits made since launch.
+func (m *model) refresh() {
+	m.base = git.MergeBase(m.repo, m.baseName)
+	if files, err := git.ChangedFiles(m.repo, m.base); err == nil {
+		m.files = files
+		if m.cursor >= len(m.files) {
+			m.cursor = max(0, len(m.files)-1)
+		}
+	}
+	m.shortstat = git.Shortstat(m.repo, m.base)
+	m.loadDiff()
+}
