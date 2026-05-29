@@ -338,15 +338,14 @@ func (m model) renderUnifiedLine(l diff.Line, width int) string {
 		return metaLineStyle.Width(width).Render(truncateText(l.Text, width))
 	}
 
-	numStyle, bodyStyle, marker := lineStyles(l.Kind)
+	numStyle, bg, marker := lineStyles(l.Kind)
 	d := m.lineDigits
 	gut := numStyle.Render(numField(l.OldNum, d) + " " + numField(l.NewNum, d) + " " + marker)
 	avail := width - lipgloss.Width(gut)
 	if avail < 1 {
 		avail = 1
 	}
-	body := bodyStyle.Width(avail).Render(truncateText(" "+l.Text, avail))
-	return gut + body
+	return gut + m.renderCode(l.Text, avail, bg)
 }
 
 // renderSplitRow renders one side-by-side row: old/del on the left, new/add on
@@ -373,7 +372,7 @@ func (m model) renderSplitSide(l *diff.Line, width int, newSide bool) string {
 	if l == nil {
 		return fillerStyle.Width(width).Render("")
 	}
-	numStyle, bodyStyle, _ := lineStyles(l.Kind)
+	numStyle, bg, _ := lineStyles(l.Kind)
 	num := l.OldNum
 	if newSide {
 		num = l.NewNum
@@ -383,20 +382,65 @@ func (m model) renderSplitSide(l *diff.Line, width int, newSide bool) string {
 	if avail < 1 {
 		avail = 1
 	}
-	body := bodyStyle.Width(avail).Render(truncateText(" "+l.Text, avail))
-	return gut + body
+	return gut + m.renderCode(l.Text, avail, bg)
 }
 
-// lineStyles returns the gutter style, body style, and marker for a line kind.
-func lineStyles(kind diff.Kind) (num, body lipgloss.Style, marker string) {
+// lineStyles returns the gutter style, the code-body background tint (nil for
+// context), and the marker for a line kind.
+func lineStyles(kind diff.Kind) (num lipgloss.Style, bg color.Color, marker string) {
 	switch kind {
 	case diff.Add:
-		return addNumStyle, addBodyStyle, "+"
+		return addNumStyle, diffAddBg, "+"
 	case diff.Del:
-		return delNumStyle, delBodyStyle, "-"
+		return delNumStyle, diffDelBg, "-"
 	default:
-		return ctxNumStyle, ctxBodyStyle, " "
+		return ctxNumStyle, nil, " "
 	}
+}
+
+// renderCode renders a line of code into exactly width columns: a leading gutter
+// space, the syntax-highlighted tokens, an ellipsis if it overflows, then padding
+// — all sharing bg so the diff row tint reads as one continuous band beneath the
+// colored tokens.
+func (m model) renderCode(text string, width int, bg color.Color) string {
+	if width <= 0 {
+		return ""
+	}
+	base := lipgloss.NewStyle()
+	if bg != nil {
+		base = base.Background(bg)
+	}
+
+	var b strings.Builder
+	used := 0
+	b.WriteString(base.Render(" ")) // left padding, matching the gutter space
+	used++
+
+	for _, sp := range m.highlight(expandTabs(text)) {
+		if used >= width {
+			break
+		}
+		st := base
+		if sp.fg != nil {
+			st = st.Foreground(sp.fg)
+		}
+		remaining := width - used
+		if lipgloss.Width(sp.text) <= remaining {
+			b.WriteString(st.Render(sp.text))
+			used += lipgloss.Width(sp.text)
+			continue
+		}
+		// Doesn't fit: cut leaving one column for the ellipsis, then stop.
+		seg := cutToWidth(sp.text, remaining-1)
+		b.WriteString(st.Render(seg))
+		b.WriteString(base.Render("…"))
+		used += lipgloss.Width(seg) + 1
+		break
+	}
+	if used < width {
+		b.WriteString(base.Render(strings.Repeat(" ", width-used)))
+	}
+	return b.String()
 }
 
 // numField right-aligns a line number in a fixed-width field, blank for 0.

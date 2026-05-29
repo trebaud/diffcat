@@ -38,19 +38,19 @@ var (
 	metaStyle    lipgloss.Style
 	contextStyle lipgloss.Style
 
-	// GitHub-style diff line styles. Each kind has a gutter style (line numbers
-	// + marker, tinted in the accent color) and a body style (code on a tinted
-	// background). Same background across gutter+body so the row tint reads as
-	// one continuous band.
+	// GitHub-style diff line styles. Each kind has a gutter style (line numbers +
+	// marker, tinted in the accent color); the code body is rendered by renderCode
+	// with the row's background tint (diffAddBg/diffDelBg) so syntax-highlighted
+	// tokens sit on one continuous band.
 	addNumStyle   lipgloss.Style
-	addBodyStyle  lipgloss.Style
 	delNumStyle   lipgloss.Style
-	delBodyStyle  lipgloss.Style
 	ctxNumStyle   lipgloss.Style
-	ctxBodyStyle  lipgloss.Style
 	hunkLineStyle lipgloss.Style
 	metaLineStyle lipgloss.Style
 	fillerStyle   lipgloss.Style // empty paired side in split view
+
+	diffAddBg color.Color // row tint behind added lines
+	diffDelBg color.Color // row tint behind removed lines
 )
 
 func init() { ApplyTheme(true) }
@@ -93,15 +93,17 @@ func ApplyTheme(isDark bool) {
 	hunkFg := ld(lipgloss.Color("#0969da"), lipgloss.Color("#58a6ff"))
 	fillBg := ld(lipgloss.Color("#f6f8fa"), lipgloss.Color("#0d1117"))
 
+	diffAddBg, diffDelBg = addBg, delBg
+
 	addNumStyle = lipgloss.NewStyle().Background(addBg).Foreground(addFg)
-	addBodyStyle = lipgloss.NewStyle().Background(addBg)
 	delNumStyle = lipgloss.NewStyle().Background(delBg).Foreground(delFg)
-	delBodyStyle = lipgloss.NewStyle().Background(delBg)
 	ctxNumStyle = lipgloss.NewStyle().Foreground(colMuted)
-	ctxBodyStyle = lipgloss.NewStyle()
 	hunkLineStyle = lipgloss.NewStyle().Background(hunkBg).Foreground(hunkFg).Bold(true)
 	metaLineStyle = lipgloss.NewStyle().Foreground(colMuted)
 	fillerStyle = lipgloss.NewStyle().Background(fillBg)
+
+	// Syntax-highlight palette tracks the same light/dark choice.
+	applyHighlightTheme(isDark)
 }
 
 // DetectAndApplyTheme inspects the terminal background once and applies the

@@ -47,6 +47,14 @@ auto-detected base branch.
     side-by-side layout (`renderSplitRow`/`renderSplitSide`) fed by
     `diff.SplitRows`. `lineDigits` sizes the gutter; row counts differ per mode
     so `totalDiffRows` drives scroll clamping and the nyan progress.
+  - Code bodies are syntax-highlighted (`highlight.go`): a Chroma lexer chosen
+    from the file path (`lexerFor`) tokenizes each line into colored `span`s,
+    memoized per line in `hlCache` (reset on `loadDiff`). `renderCode` (view.go)
+    lays the highlighted tokens over the row's background tint and pads to an
+    exact width; `expandTabs` normalizes tabs so the width math holds. The Chroma
+    style follows light/dark (`applyHighlightTheme`: github / github-dark), and
+    `lineStyles` returns the per-kind tint that `renderCode` paints beneath the
+    tokens.
   - Layout is responsive: proportional list/diff split (list capped at 40 cols),
     a minimum-size gate (`minWidth`/`minHeight` in `view.go`), and all chrome is
     width-clamped so nothing wraps. `render_smoke_test.go` guards the no-wrap

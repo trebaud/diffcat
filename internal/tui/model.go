@@ -5,6 +5,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/alecthomas/chroma/v2"
+
 	"github.com/trebaud/diff-master/internal/diff"
 	"github.com/trebaud/diff-master/internal/git"
 )
@@ -48,6 +50,11 @@ type model struct {
 	splitView  bool // false = unified (GitHub inline), true = side-by-side
 	lineDigits int
 	diffOffset int
+
+	// Syntax highlighting for the selected file: a lexer chosen from its path and
+	// a per-line span cache (reset on every loadDiff so it tracks the lexer).
+	lexer   chroma.Lexer
+	hlCache map[string][]span
 
 	width  int
 	height int
@@ -125,10 +132,13 @@ func (m *model) loadDiff() {
 	m.diffOffset = 0
 	m.diff = nil
 	m.splitRows = nil
+	m.lexer = nil
+	m.hlCache = map[string][]span{}
 	f := m.selectedFile()
 	if f == nil {
 		return
 	}
+	m.lexer = lexerFor(f.Path)
 	raw := git.FileDiff(m.repo, m.base, f.Path, f.Status)
 	if raw == "" {
 		m.diff = []diff.Line{{Kind: diff.Meta, Text: "(no textual diff — binary or empty)"}}
