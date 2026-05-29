@@ -63,8 +63,3 @@ auto-detected base branch.
     of the diff pane: position = scroll fraction, rainbow trail behind. A
     `tickMsg` loop (~7fps, `update.go`) wiggles the cat's face; it's the only
     thing driving repaints, so there's no idle redraw beyond it.
-
-## Stack
-
-Same TUI stack as the sibling `mori` project: `charm.land/bubbletea/v2`,
-`charm.land/bubbles/v2`, `charm.land/lipgloss/v2`, and `github.com/spf13/cobra`.
