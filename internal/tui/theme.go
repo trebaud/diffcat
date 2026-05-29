@@ -23,11 +23,12 @@ var (
 )
 
 var (
-	titleStyle    lipgloss.Style
-	mutedStyle    lipgloss.Style
-	headingStyle  lipgloss.Style
-	selectedStyle lipgloss.Style
-	borderStyle   lipgloss.Style
+	titleStyle       lipgloss.Style
+	mutedStyle       lipgloss.Style
+	headingStyle     lipgloss.Style
+	selectedStyle    lipgloss.Style
+	selectedRowStyle lipgloss.Style
+	borderStyle      lipgloss.Style
 
 	addedStyle   lipgloss.Style
 	removedStyle lipgloss.Style
@@ -48,6 +49,10 @@ func ApplyTheme(isDark bool) {
 	mutedStyle = lipgloss.NewStyle().Foreground(colMuted)
 	headingStyle = lipgloss.NewStyle().Foreground(colMuted).Bold(true)
 	selectedStyle = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
+	// Full-width selection bar. A layered background reads on every color tier
+	// (degrades to a visible block even in 16-color mode) and never relies on
+	// color alone — the ▸ caret marks the row too.
+	selectedRowStyle = lipgloss.NewStyle().Background(colRowBg).Foreground(colAccent).Bold(true)
 	borderStyle = lipgloss.NewStyle().Foreground(colBorder)
 
 	addedStyle = lipgloss.NewStyle().Foreground(colAdded)

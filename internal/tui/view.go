@@ -18,9 +18,19 @@ func (m model) View() tea.View {
 	return v
 }
 
+// Minimum usable terminal size. Below this the two-pane layout can't render
+// legibly, so we show a resize hint instead of a broken screen.
+const (
+	minWidth  = 60
+	minHeight = 12
+)
+
 func (m model) render() string {
 	if m.width == 0 || m.height == 0 {
 		return "loading…"
+	}
+	if m.width < minWidth || m.height < minHeight {
+		return m.tooSmallView()
 	}
 	if m.showHelp {
 		return m.helpView()
@@ -29,17 +39,24 @@ func (m model) render() string {
 	header := m.headerView()
 	footer := m.footerView()
 
-	const listWidth = 34
-	diffWidth := m.width - listWidth - 1
-	if diffWidth < 20 {
-		diffWidth = m.width // narrow terminal: drop to single column-ish
+	// Proportional split with a cap: the file list takes ~35% but never grows
+	// past 40 cols (lists don't benefit from more) nor shrinks below 22.
+	listWidth := m.width * 35 / 100
+	if listWidth > 40 {
+		listWidth = 40
 	}
+	if listWidth < 22 {
+		listWidth = 22
+	}
+	diffWidth := m.width - listWidth - 1
 
 	list := m.listView(listWidth)
 	diff := m.diffView(diffWidth)
 	body := lipgloss.JoinHorizontal(lipgloss.Top, list, borderStyle.Render(" "), diff)
 
-	return strings.Join([]string{header, body, footer}, "\n")
+	// Clamp the single-line chrome so it can never wrap and shove the body down.
+	clamp := lipgloss.NewStyle().MaxWidth(m.width)
+	return strings.Join([]string{clamp.Render(header), body, clamp.Render(footer)}, "\n")
 }
 
 func (m model) headerView() string {
@@ -92,36 +109,67 @@ func (m model) listView(width int) string {
 	return lipgloss.NewStyle().Width(width).Render(b.String())
 }
 
+// fileRow renders one entry: "▸ M path/to/file.go        +12 -3", with the
+// stats flush-right and (when selected) a full-width highlight bar. We measure
+// with plain text so alignment is exact, then colorize per segment — except a
+// selected row, where the selection color intentionally overrides the syntax
+// colors so the cursor reads unambiguously.
 func (m model) fileRow(f git.FileChange, selected bool, width int) string {
-	glyph := statusStyle(f.Status).Render(statusGlyph(f.Status))
+	glyph := statusGlyph(f.Status)
 
-	name := f.Path
-	// Budget: 2 (glyph+space) + name + stats. Truncate the path's left side so
-	// the filename stays visible.
-	maxName := width - 14
-	if maxName < 6 {
-		maxName = 6
-	}
-	if len(name) > maxName {
-		name = "…" + name[len(name)-maxName+1:]
+	statsPlain := "bin"
+	if !f.Binary() {
+		statsPlain = fmt.Sprintf("+%d -%d", f.Added, f.Deleted)
 	}
 
-	stats := ""
-	if f.Binary() {
-		stats = mutedStyle.Render("bin")
-	} else {
+	caret := "  "
+	if selected {
+		caret = "▸ "
+	}
+
+	// Layout budget: caret(2) + glyph(1) + space(1) + name + gap + stats.
+	avail := width - 2 - 1 - 1 - lipgloss.Width(statsPlain) - 1
+	if avail < 4 {
+		avail = 4
+	}
+	name := truncatePath(f.Path, avail)
+
+	gap := width - 2 - 1 - 1 - lipgloss.Width(name) - lipgloss.Width(statsPlain)
+	if gap < 1 {
+		gap = 1
+	}
+
+	if selected {
+		row := caret + glyph + " " + name + strings.Repeat(" ", gap) + statsPlain
+		return selectedRowStyle.Width(width).Render(row)
+	}
+
+	stats := mutedStyle.Render(statsPlain)
+	if !f.Binary() {
 		stats = addedStyle.Render(fmt.Sprintf("+%d", f.Added)) + " " +
 			removedStyle.Render(fmt.Sprintf("-%d", f.Deleted))
 	}
+	return caret + statusStyle(f.Status).Render(glyph) + " " +
+		name + strings.Repeat(" ", gap) + stats
+}
 
-	line := fmt.Sprintf("%s %s", glyph, name)
-	if selected {
-		line = selectedStyle.Render("▸ " + name)
-		line = glyph + " " + line
-	} else {
-		line = "  " + line
+// truncatePath keeps the filename visible by trimming the left (directory) side.
+func truncatePath(path string, max int) string {
+	if lipgloss.Width(path) <= max || max < 2 {
+		return path
 	}
-	return line + "  " + stats
+	r := []rune(path)
+	return "…" + string(r[len(r)-(max-1):])
+}
+
+func (m model) tooSmallView() string {
+	msg := fmt.Sprintf("terminal too small (%d×%d) — need at least %d×%d",
+		m.width, m.height, minWidth, minHeight)
+	pad := (m.height - 1) / 2
+	if pad < 0 {
+		pad = 0
+	}
+	return strings.Repeat("\n", pad) + " " + mutedStyle.Render(msg)
 }
 
 func (m model) diffView(width int) string {
@@ -133,7 +181,8 @@ func (m model) diffView(width int) string {
 		return lipgloss.NewStyle().Width(width).Render(mutedStyle.Render("Select a file to view its diff."))
 	}
 
-	b.WriteString(m.paneHeading(f.Path, focusDiff))
+	// paneHeading prepends a 2-col focus marker, so reserve that before trimming.
+	b.WriteString(m.paneHeading(truncatePath(f.Path, width-2), focusDiff))
 	b.WriteString("\n")
 
 	end := m.diffOffset + rows

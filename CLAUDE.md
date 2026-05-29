@@ -6,6 +6,7 @@
 go build -o diff-master ./cmd/diff-master   # Build
 go run ./cmd/diff-master                     # Run against the current repo
 go run ./cmd/diff-master files               # Non-interactive file list
+go test ./...                                # Run tests (TUI render invariants)
 go vet ./...                                 # Vet
 ```
 
@@ -28,6 +29,10 @@ auto-detected base branch.
   `diffOffset` rather than a viewport component.
   - `model.go` state/helpers, `update.go` key handling, `view.go` rendering,
     `theme.go` semantic colors (added/removed/meta) with light/dark detection.
+  - Layout is responsive: proportional list/diff split (list capped at 40 cols),
+    a minimum-size gate (`minWidth`/`minHeight` in `view.go`), and all chrome is
+    width-clamped so nothing wraps. `render_smoke_test.go` guards the no-wrap
+    invariant — every rendered line must be ≤ terminal width.
 
 ## Stack
 
