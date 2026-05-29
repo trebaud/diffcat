@@ -66,19 +66,27 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "esc":
-		// In the history view, esc steps back to the default diff rather than
-		// quitting; on the default view it still quits.
-		if m.mode == viewLog {
+		// Esc steps back one level: a per-commit tree → the history list →
+		// the default branch diff; on the default view it quits.
+		switch m.mode {
+		case viewCommit:
+			m.exitCommit()
+			return m, nil
+		case viewLog:
 			m.exitLog()
 			return m, nil
 		}
 		return m, tea.Quit
 
 	case "L":
-		// Toggle the commit-history view.
-		if m.mode == viewLog {
+		// Toggle the commit-history view. From a per-commit tree, step back to
+		// the history list (Esc's first stop) rather than all the way out.
+		switch m.mode {
+		case viewLog:
 			m.exitLog()
-		} else {
+		case viewCommit:
+			m.exitCommit()
+		default:
 			m.enterLog()
 		}
 		return m, nil
@@ -116,16 +124,17 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.focus = focusDiff
 		return m, nil
 	case "enter", "o":
+		// History list: enter drills into the highlighted commit's file tree.
+		// (Scroll its preview instead with l/Tab to focus the diff pane.)
+		if m.mode == viewLog {
+			m.enterCommit()
+			return m, nil
+		}
 		// In the diff pane, on an expand affordance: reveal hidden context.
 		if m.focus == focusDiff {
 			if l := m.cursorLine(); l != nil && l.Kind == diff.Expand {
 				m.expandUnderCursor(*l)
 			}
-			return m, nil
-		}
-		// History view: enter on a commit moves into the diff to scroll it.
-		if m.mode == viewLog {
-			m.focus = focusDiff
 			return m, nil
 		}
 		// On a folder: fold/unfold it. On a file: open its diff and move into
@@ -286,10 +295,17 @@ func (m *model) refresh() {
 		m.rebuildTree()
 	}
 	m.shortstat = git.Shortstat(m.repo, m.base)
-	if m.mode == viewLog {
+	switch m.mode {
+	case viewLog:
 		m.loadCommits()
 		m.clampCommitCursor()
 		m.loadCommitDiff()
+		return
+	case viewCommit:
+		// A commit is immutable, so its file set can't have changed; just reload
+		// the current file's diff. The stashed branch tree is refreshed on the
+		// next refresh after exiting back to it.
+		m.loadDiff()
 		return
 	}
 	m.loadDiff()

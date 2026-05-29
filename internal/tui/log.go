@@ -37,6 +37,48 @@ func (m *model) exitLog() {
 	m.loadDiff()
 }
 
+// enterCommit drills from the history list into a per-commit file tree: it
+// stashes the branch tree, loads the highlighted commit's changed files into the
+// shared tree fields, and shows the first file's diff scoped to that commit. A
+// commit with no per-file entries (e.g. a merge) still enters — the tree is just
+// empty.
+func (m *model) enterCommit() {
+	c := m.selectedCommit()
+	if c == nil {
+		return
+	}
+	// Stash the branch tree so leaving restores it untouched.
+	m.branchFiles = m.files
+	m.branchRows = m.rows
+	m.branchCursor = m.cursor
+
+	m.scopeCommit = c
+	if files, err := git.CommitFiles(m.repo, c.SHA); err == nil {
+		m.files = files
+	} else {
+		m.files = nil
+	}
+	m.cursor = 0
+	m.rebuildTree()
+	m.mode = viewCommit
+	m.focus = focusFiles
+	m.loadDiff()
+}
+
+// exitCommit returns from a per-commit tree to the history list, restoring the
+// stashed branch tree and re-previewing the commit's combined diff.
+func (m *model) exitCommit() {
+	m.scopeCommit = nil
+	m.files = m.branchFiles
+	m.rows = m.branchRows
+	m.cursor = m.branchCursor
+	m.branchFiles = nil
+	m.branchRows = nil
+	m.mode = viewLog
+	m.focus = focusFiles
+	m.loadCommitDiff()
+}
+
 // loadCommits (re)reads base..HEAD and drops the per-commit diff cache so a
 // refresh reflects new history.
 func (m *model) loadCommits() {

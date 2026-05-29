@@ -79,12 +79,28 @@ func logSampleModel() model {
 	return m
 }
 
+// commitSampleModel is sampleModel drilled into a single commit's file tree
+// (viewCommit): the file tree is reused as the commit's changed files and the
+// right pane shows the parsed sample diff scoped to that commit.
+func commitSampleModel() model {
+	m := sampleModel()
+	m.mode = viewCommit
+	m.scopeCommit = &git.Commit{
+		SHA:     "aaa111full",
+		Short:   "aaa1111",
+		Subject: "Tighten README for end users with a subject long enough to need truncation",
+	}
+	return m
+}
+
 // TestRenderNoWrap guards the invariant that no rendered line is wider than the
 // terminal — a line that overflows wraps and shoves the whole layout down.
 func TestRenderNoWrap(t *testing.T) {
 	emptyLog := logSampleModel()
 	emptyLog.commits = nil // exercise the "no commits" empty state too
-	for _, m := range []model{sampleModel(), logSampleModel(), emptyLog} {
+	emptyCommit := commitSampleModel()
+	emptyCommit.files, emptyCommit.rows = nil, nil // "no files in this commit" state
+	for _, m := range []model{sampleModel(), logSampleModel(), emptyLog, commitSampleModel(), emptyCommit} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -101,7 +117,7 @@ func TestRenderNoWrap(t *testing.T) {
 // unified and side-by-side diff modes, with the diff pane focused so its rows
 // are exercised.
 func TestFullScreenFill(t *testing.T) {
-	for _, m := range []model{sampleModel(), logSampleModel()} {
+	for _, m := range []model{sampleModel(), logSampleModel(), commitSampleModel()} {
 		m.focus = focusDiff
 		for _, split := range []bool{false, true} {
 			m.splitView = split
@@ -152,6 +168,57 @@ func TestLogModeNavigation(t *testing.T) {
 	m.exitLog()
 	if m.mode != viewBranch {
 		t.Errorf("exitLog should return to viewBranch, got %d", m.mode)
+	}
+}
+
+// TestCommitDrillInRestore checks that leaving a per-commit tree restores the
+// stashed branch tree verbatim: the same files, rows, and cursor position the
+// branch view had before drilling in, with the commit scope cleared.
+func TestCommitDrillInRestore(t *testing.T) {
+	m := logSampleModel()
+
+	// Capture the branch tree as it was before drilling in (logSampleModel was
+	// built from sampleModel, so it carries a real file tree underneath).
+	wantFiles := m.files
+	wantRows := m.rows
+	wantCursor := m.cursor
+
+	// Simulate enterCommit's effect without shelling out to git: stash the branch
+	// tree, then repurpose the shared fields for the commit's (different) files.
+	m.branchFiles, m.branchRows, m.branchCursor = m.files, m.rows, m.cursor
+	m.scopeCommit = &m.commits[0]
+	m.files = []git.FileChange{{Path: "only/in/commit.go", Status: "A", Added: 3, Deleted: 0}}
+	m.cursor = 0
+	m.rebuildTree()
+	m.mode = viewCommit
+
+	if f := m.selectedFile(); f == nil && len(m.files) > 0 {
+		// Park on the file row (the compressed "only/in" chain puts a folder first).
+		for i, r := range m.rows {
+			if r.file != nil {
+				m.cursor = i
+				break
+			}
+		}
+	}
+	if len(m.files) != 1 || m.files[0].Path != "only/in/commit.go" {
+		t.Fatalf("commit tree not loaded, files = %+v", m.files)
+	}
+
+	m.exitCommit()
+
+	if m.mode != viewLog {
+		t.Errorf("exitCommit should return to viewLog, got %d", m.mode)
+	}
+	if m.scopeCommit != nil {
+		t.Errorf("scopeCommit should be cleared, got %+v", m.scopeCommit)
+	}
+	if len(m.files) != len(wantFiles) || m.cursor != wantCursor {
+		t.Errorf("branch tree not restored: files=%d (want %d), cursor=%d (want %d)",
+			len(m.files), len(wantFiles), m.cursor, wantCursor)
+	}
+	if len(m.rows) != len(wantRows) {
+		t.Errorf("branch rows not restored: got %d, want %d", len(m.rows), len(wantRows))
 	}
 }
 

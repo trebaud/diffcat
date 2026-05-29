@@ -41,6 +41,43 @@ func TestParseCommits(t *testing.T) {
 	}
 }
 
+// TestMergeChanges covers the name-status + numstat join used by both
+// ChangedFiles and CommitFiles: order preservation, rename new-paths, binary
+// (-1) stats, and the pure-mode-change fallback (numstat missing → 0/0).
+func TestMergeChanges(t *testing.T) {
+	nameOut := "M\tinternal/tui/view.go\n" +
+		"A\tdocs/new.md\n" +
+		"R100\told/path.go\tnew/path.go\n" +
+		"M\tassets/logo.png\n" +
+		"M\tmode_only.txt\n"
+	numOut := "12\t3\tinternal/tui/view.go\n" +
+		"40\t0\tdocs/new.md\n" +
+		"5\t5\tnew/path.go\n" +
+		"-\t-\tassets/logo.png\n" // binary
+	// mode_only.txt is intentionally absent from numstat.
+
+	statusByPath, order := parseNameStatus([]byte(nameOut))
+	stats := parseNumStat([]byte(numOut))
+	got := mergeChanges(statusByPath, order, stats)
+
+	if len(got) != 5 {
+		t.Fatalf("got %d changes, want 5", len(got))
+	}
+	if got[0].Path != "internal/tui/view.go" || got[0].Status != "M" || got[0].Added != 12 || got[0].Deleted != 3 {
+		t.Errorf("change 0 = %+v", got[0])
+	}
+	// Rename: name-status reports old\tnew; the new path wins, status first letter.
+	if got[2].Path != "new/path.go" || got[2].Status != "R" {
+		t.Errorf("rename change = %+v", got[2])
+	}
+	if !got[3].Binary() {
+		t.Errorf("logo.png should be binary, got %+v", got[3])
+	}
+	if got[4].Path != "mode_only.txt" || got[4].Added != 0 || got[4].Deleted != 0 || got[4].Binary() {
+		t.Errorf("mode-only change should default to 0/0 (not binary), got %+v", got[4])
+	}
+}
+
 func TestParseCommitsEmpty(t *testing.T) {
 	if got := parseCommits(nil); len(got) != 0 {
 		t.Errorf("nil input: got %d commits, want 0", len(got))

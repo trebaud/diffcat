@@ -175,6 +175,34 @@ func CommitDiff(repo, sha string) string {
 	return strings.TrimLeft(string(out), "\n")
 }
 
+// CommitFiles lists the files a single commit changed, with per-file line stats —
+// the backing list for the per-commit file tree (viewCommit). It mirrors
+// ChangedFiles but scopes to one commit via `git show` instead of a base diff;
+// a merge shown with the default combined format yields no per-file entries, so
+// the tree comes up empty (the combined diff still previews via CommitDiff).
+func CommitFiles(repo, sha string) ([]FileChange, error) {
+	nameOut, err := exec.Command("git", "-C", repo, "show", "--no-color", "--format=", "--name-status", sha).Output()
+	if err != nil {
+		return nil, fmt.Errorf("git show --name-status failed: %w", err)
+	}
+	statusByPath, order := parseNameStatus(nameOut)
+
+	numOut, _ := exec.Command("git", "-C", repo, "show", "--no-color", "--format=", "--numstat", sha).Output()
+	stats := parseNumStat(numOut)
+
+	return mergeChanges(statusByPath, order, stats), nil
+}
+
+// CommitFileDiff returns one commit's patch for a single path, ready for
+// diff.Parse. Like CommitDiff it strips the message header via --format=.
+func CommitFileDiff(repo, sha, path string) string {
+	out, err := exec.Command("git", "-C", repo, "show", "--no-color", "--format=", "--patch", sha, "--", path).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimLeft(string(out), "\n")
+}
+
 // FileChange describes one path that differs between the base and the working tree.
 type FileChange struct {
 	Path    string
@@ -190,13 +218,31 @@ func (f FileChange) Binary() bool { return f.Added < 0 || f.Deleted < 0 }
 // including staged, unstaged, and (optionally) untracked files. It merges
 // `git diff --numstat` (line counts) with `--name-status` (change type).
 func ChangedFiles(repo, base string) ([]FileChange, error) {
-	statusByPath, order, err := nameStatus(repo, base)
+	nameOut, err := exec.Command("git", "-C", repo, "diff", "--name-status", base).Output()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("git diff failed: %w", err)
+	}
+	statusByPath, order := parseNameStatus(nameOut)
+
+	numOut, _ := exec.Command("git", "-C", repo, "diff", "--numstat", base).Output()
+	stats := parseNumStat(numOut)
+
+	changes := mergeChanges(statusByPath, order, stats)
+
+	for _, path := range untracked(repo) {
+		if _, seen := statusByPath[path]; seen {
+			continue
+		}
+		add, del := countLines(filepath.Join(repo, path))
+		changes = append(changes, FileChange{Path: path, Status: "?", Added: add, Deleted: del})
 	}
 
-	stats := numStat(repo, base)
+	return changes, nil
+}
 
+// mergeChanges joins the name-status (change type) and numstat (line counts)
+// views of the same diff into FileChanges, preserving git's reported order.
+func mergeChanges(statusByPath map[string]string, order []string, stats map[string][2]int) []FileChange {
 	changes := make([]FileChange, 0, len(order))
 	for _, path := range order {
 		add, del := -2, -2
@@ -215,24 +261,12 @@ func ChangedFiles(repo, base string) ([]FileChange, error) {
 			Deleted: del,
 		})
 	}
-
-	for _, path := range untracked(repo) {
-		if _, seen := statusByPath[path]; seen {
-			continue
-		}
-		add, del := countLines(filepath.Join(repo, path))
-		changes = append(changes, FileChange{Path: path, Status: "?", Added: add, Deleted: del})
-	}
-
-	return changes, nil
+	return changes
 }
 
-// nameStatus returns a path→status map and the paths in git's reported order.
-func nameStatus(repo, base string) (map[string]string, []string, error) {
-	out, err := exec.Command("git", "-C", repo, "diff", "--name-status", base).Output()
-	if err != nil {
-		return nil, nil, fmt.Errorf("git diff failed: %w", err)
-	}
+// parseNameStatus turns `--name-status` output into a path→status map and the
+// paths in git's reported order. Pure, so it can be tested without a repo.
+func parseNameStatus(out []byte) (map[string]string, []string) {
 	statusByPath := map[string]string{}
 	var order []string
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
@@ -249,15 +283,12 @@ func nameStatus(repo, base string) (map[string]string, []string, error) {
 		statusByPath[path] = status
 		order = append(order, path)
 	}
-	return statusByPath, order, nil
+	return statusByPath, order
 }
 
-// numStat returns path→[added, deleted]; -1 entries mean a binary file.
-func numStat(repo, base string) map[string][2]int {
-	out, err := exec.Command("git", "-C", repo, "diff", "--numstat", base).Output()
-	if err != nil {
-		return nil
-	}
+// parseNumStat turns `--numstat` output into path→[added, deleted]; -1 entries
+// mean a binary file. Pure, so it can be tested without a repo.
+func parseNumStat(out []byte) map[string][2]int {
 	stats := map[string][2]int{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		if line == "" {

@@ -86,6 +86,15 @@ func (m model) headerView() string {
 		count := "  " + headingStyle.Render(fmt.Sprintf("%d commits", len(m.commits)))
 		return left + mid + count
 	}
+	if m.mode == viewCommit {
+		c := m.scopeCommit
+		sha, subject := "", ""
+		if c != nil {
+			sha, subject = c.Short, c.Subject
+		}
+		mid := mutedStyle.Render(fmt.Sprintf("  history · commit %s", sha))
+		return left + mid + "  " + headingStyle.Render(subject)
+	}
 	base := m.baseName
 	if base == "" {
 		base = "base"
@@ -137,7 +146,11 @@ func (m model) listView(width int) string {
 	b.WriteString("\n")
 
 	if len(m.rows) == 0 {
-		b.WriteString(mutedStyle.Render("  no changes against base"))
+		msg := "  no changes against base"
+		if m.mode == viewCommit {
+			msg = "  no files in this commit"
+		}
+		b.WriteString(mutedStyle.Render(msg))
 		return lipgloss.NewStyle().Width(width).Render(b.String())
 	}
 
@@ -668,11 +681,16 @@ func (m model) paneHeading(text string, pane focusPane) string {
 
 func (m model) footerView() string {
 	var keys []string
-	if m.mode == viewLog {
+	switch m.mode {
+	case viewLog:
 		keys = []string{
-			"j/k commit", "h/l ⇄ pane", "↵ scroll diff", "gg/G top/bot", "s split", "t theme", "L/esc back", "? help", "q quit",
+			"j/k commit", "h/l ⇄ pane", "↵ open commit", "gg/G top/bot", "s split", "t theme", "L/esc back", "? help", "q quit",
 		}
-	} else {
+	case viewCommit:
+		keys = []string{
+			"j/k move", "h/l ⇄ pane", "↵ open/fold", "gg/G top/bot", "s split", "t theme", "esc back", "? help", "q quit",
+		}
+	default:
 		keys = []string{
 			"j/k move", "h/l ⇄ pane", "↵ open/fold/expand", "gg/G top/bot", "C-d/C-u half", "s split", "t theme", "L history", "? help", "q quit",
 		}
@@ -701,8 +719,8 @@ func (m model) helpView() string {
 		headingStyle.Render("  history"),
 		"  L            toggle the commit-history view",
 		"  j / k        (in history) move between commits, preview each diff",
-		"  Enter        (in history) move into the diff to scroll it",
-		"  Esc          leave history (back to the branch diff)",
+		"  Enter        (in history) open the commit's file tree",
+		"  Esc          step back: commit tree → history → branch diff",
 		"",
 		headingStyle.Render("  view"),
 		"  s            toggle unified / side-by-side",

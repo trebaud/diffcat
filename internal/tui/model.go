@@ -27,6 +27,7 @@ type viewMode int
 const (
 	viewBranch viewMode = iota // file tree (left) + selected file's diff (right)
 	viewLog                    // commit list (left) + selected commit's diff (right)
+	viewCommit                 // one commit's file tree (left) + its per-file diff (right)
 )
 
 // model is the Elm-architecture state for the diff viewer. The left pane lists
@@ -61,6 +62,16 @@ type model struct {
 	commits         []git.Commit
 	commitCursor    int
 	commitDiffCache map[string][]diff.Line
+
+	// Per-commit drill-in (viewCommit). scopeCommit is the commit whose files the
+	// tree currently shows (nil outside viewCommit); its SHA scopes loadDiff to
+	// that commit's patch. Drilling in repurposes the shared tree fields, so the
+	// branch tree is stashed in branchFiles/branchRows/branchCursor and restored
+	// verbatim on the way back to the history list.
+	scopeCommit  *git.Commit
+	branchFiles  []git.FileChange
+	branchRows   []treeRow
+	branchCursor int
 
 	// Pristine parsed diff for the selected file (never mutated), the new-side
 	// file content, and the hidden-context gaps within it. revealed records how
@@ -187,15 +198,22 @@ func (m *model) loadDiff() {
 		return
 	}
 	m.lexer = lexerFor(f.Path)
-	raw := git.FileDiff(m.repo, m.base, f.Path, f.Status)
+	var raw string
+	if m.scopeCommit != nil {
+		raw = git.CommitFileDiff(m.repo, m.scopeCommit.SHA, f.Path)
+	} else {
+		raw = git.FileDiff(m.repo, m.base, f.Path, f.Status)
+	}
 	if raw == "" {
 		m.diff = []diff.Line{{Kind: diff.Meta, Text: "(no textual diff — binary or empty)"}}
 	} else {
 		m.diff = diff.Parse(raw)
 	}
-	// The new side is the working tree; a pure deletion has none, so it has no
-	// context to expand. A binary/unreadable file yields no gaps either.
-	if f.Status != "D" {
+	// Context expansion reveals lines from the working-tree file, which only
+	// matches a diff taken against the working tree. A pure deletion has no new
+	// side, and a commit-scoped diff is against history (the tree may have moved
+	// on since), so neither offers expandable context.
+	if m.scopeCommit == nil && f.Status != "D" {
 		if fl, err := git.FileContent(m.repo, f.Path); err == nil {
 			m.fileLines = fl
 			m.gaps = diff.Gaps(m.diff, len(fl))
