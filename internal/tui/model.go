@@ -213,12 +213,20 @@ func (m *model) loadDiff() {
 	} else {
 		m.diff = diff.Parse(raw)
 	}
-	// Context expansion reveals lines from the working-tree file, which only
-	// matches a diff taken against the working tree. A pure deletion has no new
-	// side, and a commit-scoped diff is against history (the tree may have moved
-	// on since), so neither offers expandable context.
-	if m.scopeCommit == nil && f.Status != "D" {
-		if fl, err := git.FileContent(m.repo, f.Path); err == nil {
+	// Context expansion reveals the new side of the diff. For a branch diff that
+	// is the working-tree file; for a commit-scoped diff it's the file as of that
+	// commit (`git show <sha>:<path>`), so the revealed lines match the commit's
+	// state rather than a tree that may have moved on since. A pure deletion has
+	// no new side, so it offers no expandable context either way.
+	if f.Status != "D" {
+		var fl []string
+		var err error
+		if m.scopeCommit != nil {
+			fl, err = git.FileContentAt(m.repo, m.scopeCommit.SHA, f.Path)
+		} else {
+			fl, err = git.FileContent(m.repo, f.Path)
+		}
+		if err == nil {
 			m.fileLines = fl
 			m.gaps = diff.Gaps(m.diff, len(fl))
 		}

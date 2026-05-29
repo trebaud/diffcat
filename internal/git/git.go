@@ -352,6 +352,37 @@ func FileContent(repo, path string) ([]string, error) {
 	return lines, nil
 }
 
+// FileContentAt reads the file at a specific commit (the new side of a
+// commit-scoped diff) via `git show <sha>:<path>`, split into lines with the
+// same newline and binary semantics as FileContent so its length matches the
+// commit's diff line numbers. This backs context expansion in the per-commit
+// drill-in, where the new side is the file as of that commit rather than the
+// working tree.
+func FileContentAt(repo, sha, path string) ([]string, error) {
+	out, err := exec.Command("git", "-C", repo, "show", sha+":"+path).Output()
+	if err != nil {
+		return nil, fmt.Errorf("git show %s:%s failed: %w", sha, path, err)
+	}
+	if len(out) > 0 {
+		head := out
+		if len(head) > 8000 {
+			head = head[:8000]
+		}
+		if strings.IndexByte(string(head), 0) >= 0 {
+			return nil, fmt.Errorf("binary file: %s", path)
+		}
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	content := string(out)
+	lines := strings.Split(content, "\n")
+	if strings.HasSuffix(content, "\n") {
+		lines = lines[:len(lines)-1] // drop the empty element after the final newline
+	}
+	return lines, nil
+}
+
 // countLines returns (lineCount, 0) for a new file, or (-1, -1) if unreadable
 // or apparently binary (contains a NUL byte in the first chunk).
 func countLines(path string) (int, int) {

@@ -65,8 +65,10 @@ auto-detected base branch.
     reuses `listView`/`diffView`/`loadDiff` (which branches on `scopeCommit`).
     Because the tree fields are shared, `enterCommit` stashes the branch tree in
     `branchFiles`/`branchRows`/`branchCursor` and `exitCommit` restores it
-    verbatim. Context-expansion is off (the working tree may have moved past the
-    commit). `Esc` steps back one level: `viewCommit` → `viewLog` → quit; it's
+    verbatim. Context-expansion works here too: the new side is loaded via
+    `git.FileContentAt` (`git show <sha>:<path>`), so revealed context matches
+    the file as of that commit rather than the working tree, which may have moved
+    past it. `Esc` steps back one level: `viewCommit` → `viewLog` → quit; it's
     context-sensitive throughout.
     The right pane reuses the same diff renderer via the shared `diffPane`; only
     the heading differs (commit SHA + subject vs file path).
