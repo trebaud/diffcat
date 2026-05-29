@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/trebaud/diff-master/internal/diff"
 	"github.com/trebaud/diff-master/internal/git"
 )
 
@@ -214,28 +215,141 @@ func (m model) diffView(width int) string {
 		return lipgloss.NewStyle().Width(width).Render(mutedStyle.Render("Select a file to view its diff."))
 	}
 
-	// paneHeading prepends a 2-col focus marker, so reserve that before trimming.
-	b.WriteString(m.paneHeading(truncatePath(f.Path, width-2), focusDiff))
+	// Heading: file path + a mode tag. paneHeading prepends a 2-col marker.
+	mode := ""
+	if m.splitView {
+		mode = " [split]"
+	}
+	title := truncatePath(f.Path, width-2-lipgloss.Width(mode)) + mode
+	b.WriteString(m.paneHeading(title, focusDiff))
 	b.WriteString("\n")
 
-	end := m.diffOffset + rows
-	if end > len(m.diffLines) {
-		end = len(m.diffLines)
-	}
-	shown := 0
-	for i := m.diffOffset; i < end; i++ {
-		b.WriteString(colorizeDiffLine(m.diffLines[i], width))
+	lines := m.diffWindow(width, rows)
+	for _, l := range lines {
+		b.WriteString(l)
 		b.WriteString("\n")
-		shown++
 	}
 	// Pad to fill the pane so the nyan progress bar always pins to the bottom.
-	for ; shown < rows; shown++ {
+	for shown := len(lines); shown < rows; shown++ {
 		b.WriteString("\n")
 	}
 
 	b.WriteString(m.nyanProgress(width))
 
-	return lipgloss.NewStyle().Width(width).MaxWidth(width).Render(b.String())
+	return lipgloss.NewStyle().Width(width).Render(b.String())
+}
+
+// diffWindow renders the visible slice of diff rows for the current view mode.
+func (m model) diffWindow(width, rows int) []string {
+	var out []string
+	if m.splitView {
+		leftW := (width - 1) / 2
+		rightW := width - 1 - leftW
+		end := min(m.diffOffset+rows, len(m.splitRows))
+		for i := m.diffOffset; i < end; i++ {
+			out = append(out, m.renderSplitRow(m.splitRows[i], leftW, rightW))
+		}
+		return out
+	}
+	end := min(m.diffOffset+rows, len(m.diff))
+	for i := m.diffOffset; i < end; i++ {
+		out = append(out, m.renderUnifiedLine(m.diff[i], width))
+	}
+	return out
+}
+
+// renderUnifiedLine renders one inline-diff row: "old new ± code" with the whole
+// row tinted green (add) or red (del), GitHub-style.
+func (m model) renderUnifiedLine(l diff.Line, width int) string {
+	switch l.Kind {
+	case diff.Hunk:
+		return hunkLineStyle.Width(width).Render(truncateText(l.Text, width))
+	case diff.Meta:
+		return metaLineStyle.Width(width).Render(truncateText(l.Text, width))
+	}
+
+	numStyle, bodyStyle, marker := lineStyles(l.Kind)
+	d := m.lineDigits
+	gut := numStyle.Render(numField(l.OldNum, d) + " " + numField(l.NewNum, d) + " " + marker)
+	avail := width - lipgloss.Width(gut)
+	if avail < 1 {
+		avail = 1
+	}
+	body := bodyStyle.Width(avail).Render(truncateText(" "+l.Text, avail))
+	return gut + body
+}
+
+// renderSplitRow renders one side-by-side row: old/del on the left, new/add on
+// the right, divided by a vertical rule. Hunk/Meta rows span the full width.
+func (m model) renderSplitRow(r diff.Row, leftW, rightW int) string {
+	if r.Full != nil {
+		w := leftW + 1 + rightW
+		if r.Full.Kind == diff.Hunk {
+			return hunkLineStyle.Width(w).Render(truncateText(r.Full.Text, w))
+		}
+		return metaLineStyle.Width(w).Render(truncateText(r.Full.Text, w))
+	}
+	left := m.renderSplitSide(r.Left, leftW, false)
+	right := m.renderSplitSide(r.Right, rightW, true)
+	return left + borderStyle.Render("│") + right
+}
+
+// renderSplitSide renders one half of a split row. A nil line is an empty paired
+// slot, filled with a faint background so the gap reads as intentional.
+func (m model) renderSplitSide(l *diff.Line, width int, newSide bool) string {
+	if width < 1 {
+		return ""
+	}
+	if l == nil {
+		return fillerStyle.Width(width).Render("")
+	}
+	numStyle, bodyStyle, _ := lineStyles(l.Kind)
+	num := l.OldNum
+	if newSide {
+		num = l.NewNum
+	}
+	gut := numStyle.Render(numField(num, m.lineDigits) + " ")
+	avail := width - lipgloss.Width(gut)
+	if avail < 1 {
+		avail = 1
+	}
+	body := bodyStyle.Width(avail).Render(truncateText(" "+l.Text, avail))
+	return gut + body
+}
+
+// lineStyles returns the gutter style, body style, and marker for a line kind.
+func lineStyles(kind diff.Kind) (num, body lipgloss.Style, marker string) {
+	switch kind {
+	case diff.Add:
+		return addNumStyle, addBodyStyle, "+"
+	case diff.Del:
+		return delNumStyle, delBodyStyle, "-"
+	default:
+		return ctxNumStyle, ctxBodyStyle, " "
+	}
+}
+
+// numField right-aligns a line number in a fixed-width field, blank for 0.
+func numField(n, digits int) string {
+	if n <= 0 {
+		return strings.Repeat(" ", digits)
+	}
+	return fmt.Sprintf("%*d", digits, n)
+}
+
+// truncateText trims a line to max display columns, adding an ellipsis.
+func truncateText(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= max {
+		return s
+	}
+	r := []rune(s)
+	for len(r) > 0 && lipgloss.Width(string(r)) > max-1 {
+		r = r[:len(r)-1]
+	}
+	return string(r) + "…"
 }
 
 // nyanProgress renders the diff scroll position as a nyan cat marching from the
@@ -244,7 +358,7 @@ func (m model) diffView(width int) string {
 // rainbow length behind it.
 func (m model) nyanProgress(width int) string {
 	rows := m.diffViewportHeight()
-	maxOff := len(m.diffLines) - rows
+	maxOff := m.totalDiffRows() - rows
 	frac := 1.0 // whole diff fits on screen → already at the end
 	if maxOff > 0 {
 		frac = float64(m.diffOffset) / float64(maxOff)
@@ -302,29 +416,6 @@ func nyanBar(width int, frac float64, frame int) string {
 	return b.String()
 }
 
-// colorizeDiffLine styles a single unified-diff line by its leading marker.
-func colorizeDiffLine(line string, width int) string {
-	if width > 2 && len(line) > width {
-		line = line[:width-1] + "…"
-	}
-	switch {
-	case strings.HasPrefix(line, "@@"):
-		return metaStyle.Render(line)
-	case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"):
-		return headingStyle.Render(line)
-	case strings.HasPrefix(line, "diff "), strings.HasPrefix(line, "index "),
-		strings.HasPrefix(line, "new file"), strings.HasPrefix(line, "deleted file"),
-		strings.HasPrefix(line, "rename "), strings.HasPrefix(line, "similarity "):
-		return mutedStyle.Render(line)
-	case strings.HasPrefix(line, "+"):
-		return addedStyle.Render(line)
-	case strings.HasPrefix(line, "-"):
-		return removedStyle.Render(line)
-	default:
-		return contextStyle.Render(line)
-	}
-}
-
 // paneHeading renders a pane title, accented with a bar when that pane holds
 // focus so the current target of j/k/gg/G is obvious.
 func (m model) paneHeading(text string, pane focusPane) string {
@@ -336,7 +427,7 @@ func (m model) paneHeading(text string, pane focusPane) string {
 
 func (m model) footerView() string {
 	keys := []string{
-		"j/k move", "h/l ⇄ pane", "gg/G top/bot", "C-d/C-u half", "C-f/C-b page", "r refresh", "? help", "q quit",
+		"j/k move", "h/l ⇄ pane", "gg/G top/bot", "C-d/C-u half", "s split", "r refresh", "? help", "q quit",
 	}
 	return mutedStyle.Render(strings.Join(keys, "  ·  "))
 }
@@ -356,7 +447,8 @@ func (m model) helpView() string {
 		"  ctrl+d / u   half page down / up",
 		"  ctrl+f / b   full page down / up",
 		"",
-		headingStyle.Render("  other"),
+		headingStyle.Render("  view"),
+		"  s            toggle unified / side-by-side",
 		"  r            refresh from disk",
 		"  ? / q        toggle help / quit",
 		"",

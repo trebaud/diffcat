@@ -6,11 +6,26 @@ import (
 
 	"charm.land/lipgloss/v2"
 
+	"github.com/trebaud/diff-master/internal/diff"
 	"github.com/trebaud/diff-master/internal/git"
 )
 
+const sampleRaw = `diff --git a/view.go b/view.go
+index 1111111..2222222 100644
+--- a/view.go
++++ b/view.go
+@@ -10,5 +10,6 @@ func main() {
+ a long context line that definitely exceeds a narrow diff pane width by a lot
+-removed line one
+-removed line two
++added line one
++added line two
++added line three
+ trailing context
+`
+
 func sampleModel() model {
-	return model{
+	m := model{
 		baseName:  "master",
 		branch:    "feature/long-branch-name",
 		shortstat: "3 files changed, 42 insertions(+), 7 deletions(-)",
@@ -20,16 +35,13 @@ func sampleModel() model {
 			{Path: "assets/logo.png", Status: "A", Added: -1, Deleted: -1},
 			{Path: "old.txt", Status: "D", Added: 0, Deleted: 9},
 		},
-		diffLines: []string{
-			"diff --git a/view.go b/view.go",
-			"@@ -1,3 +1,4 @@",
-			" a long context line that definitely exceeds a narrow diff pane width by a lot",
-			"-removed line",
-			"+added line",
-		},
 		cursor: 1,
 		focus:  focusFiles,
 	}
+	m.diff = diff.Parse(sampleRaw)
+	m.splitRows = diff.SplitRows(m.diff)
+	m.lineDigits = lineDigits(m.diff)
+	return m
 }
 
 // TestRenderNoWrap guards the invariant that no rendered line is wider than the
@@ -47,18 +59,24 @@ func TestRenderNoWrap(t *testing.T) {
 }
 
 // TestFullScreenFill guards that the TUI occupies the entire terminal: exactly
-// one rendered line per row, and every line spans the full width.
+// one rendered line per row, and every line spans the full width — in both the
+// unified and side-by-side diff modes, with the diff pane focused so its rows
+// are exercised.
 func TestFullScreenFill(t *testing.T) {
 	m := sampleModel()
-	for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 24}, {80, 24}, {70, 16}, {60, 12}} {
-		m.width, m.height = sz[0], sz[1]
-		lines := strings.Split(m.render(), "\n")
-		if len(lines) != sz[1] {
-			t.Errorf("%dx%d: %d lines, want %d (TUI must fill the height)", sz[0], sz[1], len(lines), sz[1])
-		}
-		for i, line := range lines {
-			if w := lipgloss.Width(line); w != sz[0] {
-				t.Errorf("%dx%d line %d width %d, want %d (TUI must fill the width)", sz[0], sz[1], i, w, sz[0])
+	m.focus = focusDiff
+	for _, split := range []bool{false, true} {
+		m.splitView = split
+		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 24}, {80, 24}, {70, 16}, {60, 12}} {
+			m.width, m.height = sz[0], sz[1]
+			lines := strings.Split(m.render(), "\n")
+			if len(lines) != sz[1] {
+				t.Errorf("split=%v %dx%d: %d lines, want %d", split, sz[0], sz[1], len(lines), sz[1])
+			}
+			for i, line := range lines {
+				if w := lipgloss.Width(line); w != sz[0] {
+					t.Errorf("split=%v %dx%d line %d width %d, want %d", split, sz[0], sz[1], i, w, sz[0])
+				}
 			}
 		}
 	}

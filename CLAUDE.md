@@ -24,11 +24,20 @@ auto-detected base branch.
   plus untracked files), and per-file `FileDiff`. The diff is computed against
   the **merge base** of the base branch and HEAD, so it shows what the branch
   added rather than every change since landed on the base.
+- `diff/diff.go` — Pure parser of unified `git diff` output. `Parse` yields
+  typed, line-numbered `Line`s (Context/Add/Del/Hunk/Meta); `SplitRows` pairs
+  each removal block with the additions that follow for the side-by-side view.
+  No rendering — the TUI styles these.
 - `tui/` — Bubble Tea (Elm architecture) viewer. Two panes: file list (left),
-  colorized unified diff (right). Diff scrolling is tracked manually via
-  `diffOffset` rather than a viewport component.
+  diff (right). Diff scrolling is tracked manually via `diffOffset` rather than
+  a viewport component.
   - `model.go` state/helpers, `update.go` key handling, `view.go` rendering,
-    `theme.go` semantic colors (added/removed/meta) with light/dark detection.
+    `theme.go` semantic colors with light/dark detection.
+  - Diffs render GitHub-style: full-row green/red background tints with
+    line-number gutters (`renderUnifiedLine`). `s` toggles `splitView` for a
+    side-by-side layout (`renderSplitRow`/`renderSplitSide`) fed by
+    `diff.SplitRows`. `lineDigits` sizes the gutter; row counts differ per mode
+    so `totalDiffRows` drives scroll clamping and the nyan progress.
   - Layout is responsive: proportional list/diff split (list capped at 40 cols),
     a minimum-size gate (`minWidth`/`minHeight` in `view.go`), and all chrome is
     width-clamped so nothing wraps. `render_smoke_test.go` guards the no-wrap

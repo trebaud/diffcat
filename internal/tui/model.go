@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"strconv"
+
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/trebaud/diff-master/internal/diff"
 	"github.com/trebaud/diff-master/internal/git"
 )
 
@@ -31,8 +34,12 @@ type model struct {
 	files  []git.FileChange
 	cursor int // index into files
 
-	// diff cache + scroll for the selected file
-	diffLines  []string
+	// Parsed diff for the selected file, plus the side-by-side projection and
+	// the scroll position. lineDigits sizes the line-number gutter.
+	diff       []diff.Line
+	splitRows  []diff.Row
+	splitView  bool // false = unified (GitHub inline), true = side-by-side
+	lineDigits int
 	diffOffset int
 
 	width  int
@@ -67,21 +74,55 @@ func (m model) selectedFile() *git.FileChange {
 	return nil
 }
 
-// loadDiff fetches and splits the diff for the file under the cursor, resetting
-// the scroll position.
+// loadDiff fetches and parses the diff for the file under the cursor, building
+// the side-by-side projection and resetting the scroll position.
 func (m *model) loadDiff() {
 	m.diffOffset = 0
-	m.diffLines = nil
+	m.diff = nil
+	m.splitRows = nil
 	f := m.selectedFile()
 	if f == nil {
 		return
 	}
 	raw := git.FileDiff(m.repo, m.base, f.Path, f.Status)
 	if raw == "" {
-		m.diffLines = []string{"(no textual diff — binary or empty)"}
-		return
+		m.diff = []diff.Line{{Kind: diff.Meta, Text: "(no textual diff — binary or empty)"}}
+	} else {
+		m.diff = diff.Parse(raw)
 	}
-	m.diffLines = splitLines(raw)
+	m.splitRows = diff.SplitRows(m.diff)
+	m.lineDigits = lineDigits(m.diff)
+}
+
+// totalDiffRows is the number of scrollable rows in the current view mode.
+func (m model) totalDiffRows() int {
+	if m.splitView {
+		return len(m.splitRows)
+	}
+	return len(m.diff)
+}
+
+// lineDigits sizes the line-number gutter from the largest line number, clamped
+// to a sane range so a huge file doesn't eat the whole pane.
+func lineDigits(lines []diff.Line) int {
+	maxN := 0
+	for _, l := range lines {
+		if l.OldNum > maxN {
+			maxN = l.OldNum
+		}
+		if l.NewNum > maxN {
+			maxN = l.NewNum
+		}
+	}
+	d := len(strconv.Itoa(maxN))
+	switch {
+	case d < 2:
+		return 2
+	case d > 5:
+		return 5
+	default:
+		return d
+	}
 }
 
 // diffViewportHeight is the number of diff rows visible in the right pane after
@@ -100,7 +141,7 @@ func (m model) listViewportHeight() int {
 }
 
 func (m *model) clampDiffOffset() {
-	max := len(m.diffLines) - m.diffViewportHeight()
+	max := m.totalDiffRows() - m.diffViewportHeight()
 	if max < 0 {
 		max = 0
 	}
@@ -110,19 +151,4 @@ func (m *model) clampDiffOffset() {
 	if m.diffOffset < 0 {
 		m.diffOffset = 0
 	}
-}
-
-func splitLines(s string) []string {
-	var lines []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			lines = append(lines, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		lines = append(lines, s[start:])
-	}
-	return lines
 }

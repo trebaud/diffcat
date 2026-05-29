@@ -70,6 +70,13 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, nil
 
+	case "s":
+		// Toggle unified ↔ side-by-side. Row counts differ between modes, so
+		// reset to the top to keep the scroll position sensible.
+		m.splitView = !m.splitView
+		m.diffOffset = 0
+		return m, nil
+
 	// --- pane focus (vim window motions) ---
 	case "tab":
 		m.toggleFocus()
@@ -157,7 +164,7 @@ func (m *model) gotoBottom() {
 		m.loadDiff()
 		return
 	}
-	m.diffOffset = len(m.diffLines)
+	m.diffOffset = m.totalDiffRows()
 	m.clampDiffOffset()
 }
 
