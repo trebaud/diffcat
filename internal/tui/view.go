@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/trebaud/sashi/internal/diff"
+	"github.com/trebaud/sashi/internal/git"
 )
 
 // View renders the full screen: a header bar, the file list beside the diff
@@ -62,9 +63,15 @@ func (m model) render() string {
 	}
 	fill := lipgloss.NewStyle().Height(bodyHeight).MaxHeight(bodyHeight)
 
-	list := fill.Render(m.listView(listWidth))
-	diff := fill.Render(m.diffView(diffWidth))
-	body := lipgloss.JoinHorizontal(lipgloss.Top, list, m.divider(bodyHeight), diff)
+	var left, right string
+	if m.mode == viewLog {
+		left = fill.Render(m.commitListView(listWidth))
+		right = fill.Render(m.commitDiffView(diffWidth))
+	} else {
+		left = fill.Render(m.listView(listWidth))
+		right = fill.Render(m.diffView(diffWidth))
+	}
+	body := lipgloss.JoinHorizontal(lipgloss.Top, left, m.divider(bodyHeight), right)
 
 	// The chrome rows span the full width: truncate (never wrap) then pad.
 	header := padLine(m.headerView(), m.width)
@@ -73,11 +80,16 @@ func (m model) render() string {
 }
 
 func (m model) headerView() string {
+	left := titleStyle.Render("sashi")
+	if m.mode == viewLog {
+		mid := mutedStyle.Render(fmt.Sprintf("  %s · history", branchLabel(m.branch)))
+		count := "  " + headingStyle.Render(fmt.Sprintf("%d commits", len(m.commits)))
+		return left + mid + count
+	}
 	base := m.baseName
 	if base == "" {
 		base = "base"
 	}
-	left := titleStyle.Render("sashi")
 	mid := mutedStyle.Render(fmt.Sprintf("  %s ← %s", branchLabel(m.branch), base))
 	stat := ""
 	if m.shortstat != "" {
@@ -144,6 +156,62 @@ func (m model) listView(width int) string {
 		b.WriteString("\n")
 	}
 	return lipgloss.NewStyle().Width(width).Render(b.String())
+}
+
+// commitListView renders the left pane in history mode: the branch's commits
+// (base..HEAD), newest first, as a scrollable selectable list.
+func (m model) commitListView(width int) string {
+	rows := m.listViewportHeight()
+	var b strings.Builder
+
+	b.WriteString(m.paneHeading(fmt.Sprintf("Commits (%d)", len(m.commits)), focusFiles))
+	b.WriteString("\n")
+
+	if len(m.commits) == 0 {
+		b.WriteString(mutedStyle.Render("  no commits on this branch"))
+		return lipgloss.NewStyle().Width(width).Render(b.String())
+	}
+
+	// Scroll the list to keep the cursor visible (mirrors listView).
+	offset := 0
+	if m.commitCursor >= rows {
+		offset = m.commitCursor - rows + 1
+	}
+	end := offset + rows
+	if end > len(m.commits) {
+		end = len(m.commits)
+	}
+	for i := offset; i < end; i++ {
+		b.WriteString(m.commitRow(m.commits[i], i == m.commitCursor, width))
+		b.WriteString("\n")
+	}
+	return lipgloss.NewStyle().Width(width).Render(b.String())
+}
+
+// commitRow renders one commit line: a node glyph (● commit, ◆ merge), the short
+// SHA, and the subject. The selected row is one continuous highlight bar; an
+// unselected row colorizes the glyph and SHA. Stacked glyphs form the rail.
+func (m model) commitRow(c git.Commit, selected bool, width int) string {
+	glyph := "●"
+	if c.IsMerge() {
+		glyph = "◆"
+	}
+	head := glyph + " " + c.Short + " "
+	avail := width - lipgloss.Width(head)
+	if avail < 3 {
+		avail = 3
+	}
+	subj := truncateText(c.Subject, avail)
+
+	if selected {
+		return selectedRowStyle.Width(width).Render(head + subj)
+	}
+
+	glyphStyle := titleStyle
+	if c.IsMerge() {
+		glyphStyle = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
+	}
+	return glyphStyle.Render(glyph) + " " + metaStyle.Render(c.Short) + " " + subj
 }
 
 // treeRow renders one line of the file tree — a folder ("▾ internal/tui  +42 -7")
@@ -264,41 +332,54 @@ func (m model) tooSmallView() string {
 
 func (m model) diffView(width int) string {
 	rows := m.diffViewportHeight()
-	var b strings.Builder
-
 	f := m.selectedFile()
 
 	// Heading + body depend on what's under the cursor: a file shows its diff, a
-	// folder shows a roll-up, and an empty tree shows a hint. Either way the body
-	// is padded to fill the pane so the nyan progress bar pins to the bottom.
-	var lines []string
-	switch {
-	case f != nil:
-		mode := ""
-		if m.splitView {
-			mode = " [split]"
-		}
-		title := truncatePath(f.Path, width-2-lipgloss.Width(mode)) + mode
-		b.WriteString(m.paneHeading(title, focusDiff))
-		lines = m.diffWindow(width, rows)
-	default:
-		title, body := m.noFileSelection(width)
-		b.WriteString(m.paneHeading(title, focusDiff))
-		lines = []string{body}
+	// folder shows a roll-up, and an empty tree shows a hint.
+	if f != nil {
+		title := truncatePath(f.Path, width-2-lipgloss.Width(m.splitTag())) + m.splitTag()
+		return m.diffPane(width, title, m.diffWindow(width, rows))
 	}
-	b.WriteString("\n")
+	title, body := m.noFileSelection(width)
+	return m.diffPane(width, title, []string{body})
+}
 
+// commitDiffView renders the right pane in history mode: the highlighted
+// commit's combined diff, headed by its short SHA and subject.
+func (m model) commitDiffView(width int) string {
+	rows := m.diffViewportHeight()
+	c := m.selectedCommit()
+	if c == nil {
+		return m.diffPane(width, "commit", []string{mutedStyle.Render("  No commit selected.")})
+	}
+	title := truncateText(c.Short+"  "+c.Subject, width-2-lipgloss.Width(m.splitTag())) + m.splitTag()
+	return m.diffPane(width, title, m.diffWindow(width, rows))
+}
+
+// splitTag is the " [split]" badge appended to a diff-pane title in split mode.
+func (m model) splitTag() string {
+	if m.splitView {
+		return " [split]"
+	}
+	return ""
+}
+
+// diffPane lays out the right pane: a focus-aware heading, the body lines, blank
+// padding so the pane fills its height, and the nyan progress bar pinned to the
+// bottom. Shared by the file diff and the commit diff.
+func (m model) diffPane(width int, title string, lines []string) string {
+	rows := m.diffViewportHeight()
+	var b strings.Builder
+	b.WriteString(m.paneHeading(title, focusDiff))
+	b.WriteString("\n")
 	for _, l := range lines {
 		b.WriteString(l)
 		b.WriteString("\n")
 	}
-	// Pad to fill the pane so the nyan progress bar always pins to the bottom.
 	for shown := len(lines); shown < rows; shown++ {
 		b.WriteString("\n")
 	}
-
 	b.WriteString(m.nyanProgress(width))
-
 	return lipgloss.NewStyle().Width(width).Render(b.String())
 }
 
@@ -586,8 +667,15 @@ func (m model) paneHeading(text string, pane focusPane) string {
 }
 
 func (m model) footerView() string {
-	keys := []string{
-		"j/k move", "h/l ⇄ pane", "↵ open/fold/expand", "gg/G top/bot", "C-d/C-u half", "s split", "t theme", "r refresh", "? help", "q quit",
+	var keys []string
+	if m.mode == viewLog {
+		keys = []string{
+			"j/k commit", "h/l ⇄ pane", "↵ scroll diff", "gg/G top/bot", "s split", "t theme", "L/esc back", "? help", "q quit",
+		}
+	} else {
+		keys = []string{
+			"j/k move", "h/l ⇄ pane", "↵ open/fold/expand", "gg/G top/bot", "C-d/C-u half", "s split", "t theme", "L history", "? help", "q quit",
+		}
 	}
 	return mutedStyle.Render(strings.Join(keys, "  ·  "))
 }
@@ -609,6 +697,12 @@ func (m model) helpView() string {
 		"",
 		headingStyle.Render("  diff"),
 		"  ↵ / o on  ↕  expand hidden context (↓ below, ↑ above)",
+		"",
+		headingStyle.Render("  history"),
+		"  L            toggle the commit-history view",
+		"  j / k        (in history) move between commits, preview each diff",
+		"  Enter        (in history) move into the diff to scroll it",
+		"  Esc          leave history (back to the branch diff)",
 		"",
 		headingStyle.Render("  view"),
 		"  s            toggle unified / side-by-side",

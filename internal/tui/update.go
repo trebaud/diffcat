@@ -62,8 +62,26 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch key {
-	case "q", "ctrl+c", "esc":
+	case "q", "ctrl+c":
 		return m, tea.Quit
+
+	case "esc":
+		// In the history view, esc steps back to the default diff rather than
+		// quitting; on the default view it still quits.
+		if m.mode == viewLog {
+			m.exitLog()
+			return m, nil
+		}
+		return m, tea.Quit
+
+	case "L":
+		// Toggle the commit-history view.
+		if m.mode == viewLog {
+			m.exitLog()
+		} else {
+			m.enterLog()
+		}
+		return m, nil
 
 	case "?":
 		m.showHelp = true
@@ -103,6 +121,11 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if l := m.cursorLine(); l != nil && l.Kind == diff.Expand {
 				m.expandUnderCursor(*l)
 			}
+			return m, nil
+		}
+		// History view: enter on a commit moves into the diff to scroll it.
+		if m.mode == viewLog {
+			m.focus = focusDiff
 			return m, nil
 		}
 		// On a folder: fold/unfold it. On a file: open its diff and move into
@@ -163,42 +186,57 @@ func (m *model) toggleFocus() {
 	}
 }
 
-// moveDown/moveUp dispatch j/k to the focused pane: file selection on the
-// left, the line cursor on the right.
+// moveDown/moveUp dispatch j/k to the focused pane: in viewLog the left pane is
+// the commit list, otherwise it's the file tree; the right pane is always the
+// diff's line cursor.
 func (m *model) moveDown() {
-	if m.focus == focusFiles {
-		m.moveCursor(1)
-	} else {
+	switch {
+	case m.focus != focusFiles:
 		m.moveDiffCursor(1)
+	case m.mode == viewLog:
+		m.moveCommitCursor(1)
+	default:
+		m.moveCursor(1)
 	}
 }
 
 func (m *model) moveUp() {
-	if m.focus == focusFiles {
-		m.moveCursor(-1)
-	} else {
+	switch {
+	case m.focus != focusFiles:
 		m.moveDiffCursor(-1)
+	case m.mode == viewLog:
+		m.moveCommitCursor(-1)
+	default:
+		m.moveCursor(-1)
 	}
 }
 
 func (m *model) gotoTop() {
-	if m.focus == focusFiles {
+	switch {
+	case m.focus != focusFiles:
+		m.diffCursor = 0
+		m.ensureCursorVisible()
+	case m.mode == viewLog:
+		m.commitCursor = 0
+		m.loadCommitDiff()
+	default:
 		m.cursor = 0
 		m.loadDiff()
-		return
 	}
-	m.diffCursor = 0
-	m.ensureCursorVisible()
 }
 
 func (m *model) gotoBottom() {
-	if m.focus == focusFiles {
+	switch {
+	case m.focus != focusFiles:
+		m.diffCursor = m.totalDiffRows() - 1
+		m.ensureCursorVisible()
+	case m.mode == viewLog:
+		m.commitCursor = max(0, len(m.commits)-1)
+		m.loadCommitDiff()
+	default:
 		m.cursor = max(0, len(m.rows)-1)
 		m.loadDiff()
-		return
 	}
-	m.diffCursor = m.totalDiffRows() - 1
-	m.ensureCursorVisible()
 }
 
 // moveDiffCursor moves the diff-pane line cursor and scrolls to keep it visible.
@@ -248,5 +286,22 @@ func (m *model) refresh() {
 		m.rebuildTree()
 	}
 	m.shortstat = git.Shortstat(m.repo, m.base)
+	if m.mode == viewLog {
+		m.loadCommits()
+		m.clampCommitCursor()
+		m.loadCommitDiff()
+		return
+	}
 	m.loadDiff()
+}
+
+// clampCommitCursor keeps the history cursor within the (possibly reloaded)
+// commit list.
+func (m *model) clampCommitCursor() {
+	if m.commitCursor >= len(m.commits) {
+		m.commitCursor = max(0, len(m.commits)-1)
+	}
+	if m.commitCursor < 0 {
+		m.commitCursor = 0
+	}
 }

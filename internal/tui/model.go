@@ -19,11 +19,22 @@ const (
 	focusDiff                   // right: the unified diff
 )
 
+// viewMode selects the screen layout. viewBranch is the default file-tree/diff
+// view; viewLog replaces the left pane with the branch's commit history and the
+// right pane with the highlighted commit's full diff.
+type viewMode int
+
+const (
+	viewBranch viewMode = iota // file tree (left) + selected file's diff (right)
+	viewLog                    // commit list (left) + selected commit's diff (right)
+)
+
 // model is the Elm-architecture state for the diff viewer. The left pane lists
 // changed files; the right pane shows the selected file's diff. Diff scrolling
 // is tracked manually via diffOffset rather than a viewport component, matching
 // the rest of the rendering which is hand-laid-out.
 type model struct {
+	mode     viewMode  // viewBranch (file/diff) or viewLog (history)
 	focus    focusPane // pane that j/k/gg/G operate on
 	pendingG bool      // first half of the `gg` chord was pressed
 
@@ -42,6 +53,14 @@ type model struct {
 	rows      []treeRow
 	cursor    int
 	collapsed map[string]bool
+
+	// History (viewLog). commits is base..HEAD newest-first; commitCursor indexes
+	// it (the list scrolls to keep it visible, like the file tree). The
+	// highlighted commit's parsed diff is memoized by SHA so scrolling the list
+	// doesn't re-shell `git show`.
+	commits         []git.Commit
+	commitCursor    int
+	commitDiffCache map[string][]diff.Line
 
 	// Pristine parsed diff for the selected file (never mutated), the new-side
 	// file content, and the hidden-context gaps within it. revealed records how
@@ -78,17 +97,24 @@ type model struct {
 
 func newModel(repo, base, baseName, branch string, files []git.FileChange, shortstat string, dark bool) model {
 	m := model{
-		repo:      repo,
-		base:      base,
-		baseName:  baseName,
-		branch:    branch,
-		shortstat: shortstat,
-		files:     files,
-		collapsed: map[string]bool{},
-		dark:      dark,
+		repo:            repo,
+		base:            base,
+		baseName:        baseName,
+		branch:          branch,
+		shortstat:       shortstat,
+		files:           files,
+		collapsed:       map[string]bool{},
+		commitDiffCache: map[string][]diff.Line{},
+		dark:            dark,
 	}
 	m.rebuildTree()
 	m.loadDiff()
+	// With no working-tree changes the branch diff is empty (e.g. a clean
+	// checkout of the default branch), so open straight into the commit history
+	// — that's the only thing worth looking at.
+	if len(files) == 0 {
+		m.enterLog()
+	}
 	return m
 }
 

@@ -23,7 +23,14 @@ auto-detected base branch.
   merge-base resolution, `ChangedFiles` (merges `--numstat` + `--name-status`,
   plus untracked files), and per-file `FileDiff`. The diff is computed against
   the **merge base** of the base branch and HEAD, so it shows what the branch
-  added rather than every change since landed on the base.
+  added rather than every change since landed on the base. `BaseRef` resolves
+  the diff endpoint: a branch goes through the merge base, but a raw commit/tag
+  is used verbatim so `--base <sha>` compares against exactly that commit.
+  `Commits` lists the branch's history (`base..HEAD`, newest first, with parent
+  SHAs for merge detection) via a separator-framed `git log` parsed by the pure
+  `parseCommits` — and falls back to HEAD's full history when that range is empty
+  (e.g. sitting on the default branch); `CommitDiff` returns one commit's patch
+  (`git show --format=`).
 - `diff/diff.go` — Pure parser of unified `git diff` output. `Parse` yields
   typed, line-numbered `Line`s (Context/Add/Del/Hunk/Meta); `SplitRows` pairs
   each removal block with the additions that follow for the side-by-side view.
@@ -33,7 +40,18 @@ auto-detected base branch.
   a viewport component.
   - `model.go` state/helpers, `update.go` key handling, `view.go` rendering,
     `theme.go` semantic colors with light/dark detection, `tree.go` the file-tree
-    model.
+    model, `log.go` the commit-history mode.
+  - Two view modes (`viewMode` in `model.go`): `viewBranch` (default) and
+    `viewLog`, toggled with `L`. In `viewLog` (`log.go`) the left pane is the
+    branch's commit list (`base..HEAD`, newest first; `●` nodes, `◆` for merges)
+    and the right pane live-previews the highlighted commit's full combined diff
+    — `j/k` move the commit cursor (`loadCommitDiff`, memoized per SHA in
+    `commitDiffCache`), `Enter` focuses the diff to scroll it, `Esc`/`L` return
+    to the branch view. Context-expansion is disabled there (the multi-file
+    patch has no single backing file) and the combined diff isn't syntax-lexed.
+    The right pane reuses the same diff renderer via the shared `diffPane`; only
+    the heading differs (commit SHA + subject vs file path). `Esc` is
+    context-sensitive — it leaves history when in `viewLog`, else quits.
   - The left pane is a collapsible file tree (`tree.go`): the flat `files` list
     builds a `treeNode` tree, single-child folder chains are compressed
     (`internal/tui/` on one row), and it flattens into `rows []treeRow` — the

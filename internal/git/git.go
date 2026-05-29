@@ -93,6 +93,88 @@ func BaseRef(repo, base string) string {
 	return base
 }
 
+// Commit is one commit's metadata for the history view. Short is the abbreviated
+// SHA, Date is the author date (YYYY-MM-DD), and Parents lists parent SHAs —
+// more than one means a merge commit.
+type Commit struct {
+	SHA     string
+	Short   string
+	Author  string
+	Date    string
+	Subject string
+	Parents []string
+}
+
+// IsMerge reports whether the commit has more than one parent.
+func (c Commit) IsMerge() bool { return len(c.Parents) > 1 }
+
+// Commits lists the branch's history newest-first. On a feature branch it shows
+// the commits added on top of base (base..HEAD); when that range is empty — e.g.
+// HEAD sits on the base/default branch itself — it falls back to HEAD's full
+// history so the view always has something to show.
+func Commits(repo, base string) ([]Commit, error) {
+	commits, err := commitLog(repo, base+"..HEAD")
+	if err != nil {
+		return nil, err
+	}
+	if len(commits) == 0 {
+		return commitLog(repo, "HEAD")
+	}
+	return commits, nil
+}
+
+// commitLog runs `git log` over revRange and parses the result.
+func commitLog(repo, revRange string) ([]Commit, error) {
+	// Unit/record separators (US 0x1f / RS 0x1e) frame the fields so subjects
+	// with spaces or punctuation parse unambiguously.
+	const format = "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%P%x1f%s%x1e"
+	out, err := exec.Command("git", "-C", repo, "log", "--no-color", "--date=short", format, revRange).Output()
+	if err != nil {
+		return nil, fmt.Errorf("git log failed: %w", err)
+	}
+	return parseCommits(out), nil
+}
+
+// parseCommits turns the separator-framed `git log` output into Commits. It is a
+// pure function so it can be tested without a repository.
+func parseCommits(data []byte) []Commit {
+	var commits []Commit
+	for _, rec := range strings.Split(string(data), "\x1e") {
+		rec = strings.Trim(rec, "\n")
+		if rec == "" {
+			continue
+		}
+		f := strings.Split(rec, "\x1f")
+		if len(f) < 6 {
+			continue
+		}
+		var parents []string
+		if p := strings.TrimSpace(f[4]); p != "" {
+			parents = strings.Fields(p)
+		}
+		commits = append(commits, Commit{
+			SHA:     f[0],
+			Short:   f[1],
+			Author:  f[2],
+			Date:    f[3],
+			Parents: parents,
+			Subject: f[5],
+		})
+	}
+	return commits
+}
+
+// CommitDiff returns the patch a single commit introduced, ready for diff.Parse.
+// `git show --format=` drops the commit-message header and emits a plain unified
+// diff; it handles root commits and merges (combined diff) without special-casing.
+func CommitDiff(repo, sha string) string {
+	out, err := exec.Command("git", "-C", repo, "show", "--no-color", "--format=", "--patch", sha).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimLeft(string(out), "\n")
+}
+
 // FileChange describes one path that differs between the base and the working tree.
 type FileChange struct {
 	Path    string

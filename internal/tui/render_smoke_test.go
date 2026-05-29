@@ -60,15 +60,37 @@ func sampleModel() model {
 	return m
 }
 
+// logSampleModel is sampleModel switched into the commit-history view with a few
+// injected commits (one normal, one merge, one root) and a long subject to
+// exercise truncation. The right pane reuses the parsed sample diff.
+func logSampleModel() model {
+	m := sampleModel()
+	m.mode = viewLog
+	m.commits = []git.Commit{
+		{SHA: "aaa111full", Short: "aaa1111", Author: "Ada Lovelace", Date: "2026-05-29", Parents: []string{"p1"}, Subject: "Tighten README for end users with a subject long enough to need truncation in a narrow pane"},
+		{SHA: "bbb222full", Short: "bbb2222", Author: "Grace Hopper", Date: "2026-05-28", Parents: []string{"p1", "p2"}, Subject: "Merge branch 'feature' into main"},
+		{SHA: "ccc333full", Short: "ccc3333", Author: "Alan Turing", Date: "2026-05-27", Parents: nil, Subject: "Initial commit"},
+	}
+	m.commitCursor = 0
+	m.commitDiffCache = map[string][]diff.Line{}
+	// Reuse the diff sampleModel already parsed as the highlighted commit's diff.
+	m.commitDiffCache["aaa111full"] = m.diff
+	m.rebuildView()
+	return m
+}
+
 // TestRenderNoWrap guards the invariant that no rendered line is wider than the
 // terminal — a line that overflows wraps and shoves the whole layout down.
 func TestRenderNoWrap(t *testing.T) {
-	m := sampleModel()
-	for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
-		m.width, m.height = sz[0], sz[1]
-		for i, line := range strings.Split(m.render(), "\n") {
-			if w := lipgloss.Width(line); w > m.width {
-				t.Errorf("%dx%d line %d width %d exceeds %d: %q", sz[0], sz[1], i, w, m.width, line)
+	emptyLog := logSampleModel()
+	emptyLog.commits = nil // exercise the "no commits" empty state too
+	for _, m := range []model{sampleModel(), logSampleModel(), emptyLog} {
+		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
+			m.width, m.height = sz[0], sz[1]
+			for i, line := range strings.Split(m.render(), "\n") {
+				if w := lipgloss.Width(line); w > m.width {
+					t.Errorf("mode=%d %dx%d line %d width %d exceeds %d: %q", m.mode, sz[0], sz[1], i, w, m.width, line)
+				}
 			}
 		}
 	}
@@ -79,22 +101,57 @@ func TestRenderNoWrap(t *testing.T) {
 // unified and side-by-side diff modes, with the diff pane focused so its rows
 // are exercised.
 func TestFullScreenFill(t *testing.T) {
-	m := sampleModel()
-	m.focus = focusDiff
-	for _, split := range []bool{false, true} {
-		m.splitView = split
-		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 24}, {80, 24}, {70, 16}, {60, 12}} {
-			m.width, m.height = sz[0], sz[1]
-			lines := strings.Split(m.render(), "\n")
-			if len(lines) != sz[1] {
-				t.Errorf("split=%v %dx%d: %d lines, want %d", split, sz[0], sz[1], len(lines), sz[1])
-			}
-			for i, line := range lines {
-				if w := lipgloss.Width(line); w != sz[0] {
-					t.Errorf("split=%v %dx%d line %d width %d, want %d", split, sz[0], sz[1], i, w, sz[0])
+	for _, m := range []model{sampleModel(), logSampleModel()} {
+		m.focus = focusDiff
+		for _, split := range []bool{false, true} {
+			m.splitView = split
+			for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 24}, {80, 24}, {70, 16}, {60, 12}} {
+				m.width, m.height = sz[0], sz[1]
+				lines := strings.Split(m.render(), "\n")
+				if len(lines) != sz[1] {
+					t.Errorf("mode=%d split=%v %dx%d: %d lines, want %d", m.mode, split, sz[0], sz[1], len(lines), sz[1])
+				}
+				for i, line := range lines {
+					if w := lipgloss.Width(line); w != sz[0] {
+						t.Errorf("mode=%d split=%v %dx%d line %d width %d, want %d", m.mode, split, sz[0], sz[1], i, w, sz[0])
+					}
 				}
 			}
 		}
+	}
+}
+
+// TestLogModeNavigation checks the history view's cursor movement, merge
+// detection, clamping, and that leaving restores the branch view.
+func TestLogModeNavigation(t *testing.T) {
+	m := logSampleModel()
+	if m.mode != viewLog {
+		t.Fatalf("logSampleModel should be in viewLog, got %d", m.mode)
+	}
+	if c := m.selectedCommit(); c == nil || c.Short != "aaa1111" {
+		t.Fatalf("first selected commit = %+v", c)
+	}
+
+	m.moveCommitCursor(1)
+	if m.commitCursor != 1 {
+		t.Errorf("after move down, cursor = %d, want 1", m.commitCursor)
+	}
+	if c := m.selectedCommit(); c == nil || !c.IsMerge() {
+		t.Errorf("commit at index 1 should be a merge, got %+v", c)
+	}
+
+	m.moveCommitCursor(99)
+	if m.commitCursor != len(m.commits)-1 {
+		t.Errorf("cursor should clamp to last (%d), got %d", len(m.commits)-1, m.commitCursor)
+	}
+	m.moveCommitCursor(-99)
+	if m.commitCursor != 0 {
+		t.Errorf("cursor should clamp to 0, got %d", m.commitCursor)
+	}
+
+	m.exitLog()
+	if m.mode != viewBranch {
+		t.Errorf("exitLog should return to viewBranch, got %d", m.mode)
 	}
 }
 
