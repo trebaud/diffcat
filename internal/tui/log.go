@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"github.com/alecthomas/chroma/v2"
+
 	"github.com/trebaud/sashi/internal/diff"
 	"github.com/trebaud/sashi/internal/git"
 )
@@ -108,8 +110,9 @@ func (m *model) moveCommitCursor(delta int) {
 
 // loadCommitDiff parses the diff for the highlighted commit into the shared diff
 // state and resets scroll. The patch spans multiple files, so context expansion
-// is disabled (no single backing file) and no lexer is set — a combined patch
-// has no one language to highlight. Results are memoized per SHA.
+// is disabled (no single backing file) and m.lexer stays nil — instead each line
+// is highlighted per file via lineLexer/pathLexers, keyed on the Path the diff
+// parser carries from the patch's `+++` headers. Results are memoized per SHA.
 func (m *model) loadCommitDiff() {
 	m.diffOffset = 0
 	m.diffCursor = 0
@@ -121,6 +124,7 @@ func (m *model) loadCommitDiff() {
 	m.splitRows = nil
 	m.lexer = nil
 	m.hlCache = map[string][]span{}
+	m.pathLexers = map[string]chroma.Lexer{}
 
 	c := m.selectedCommit()
 	if c == nil {

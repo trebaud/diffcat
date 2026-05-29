@@ -108,18 +108,24 @@ func lexerFor(path string) chroma.Lexer {
 	return chroma.Coalesce(l)
 }
 
-// highlight tokenizes one line into colored spans, memoized per line text so a
-// repaint (the nyan tick fires ~7fps) doesn't re-lex the visible window. The
-// cache is reset whenever the selected file — and thus the lexer — changes.
-func (m model) highlight(text string) []span {
+// highlight tokenizes one line into colored spans with the given lexer, memoized
+// so a repaint (the nyan tick fires ~7fps) doesn't re-lex the visible window. The
+// cache key folds in the lexer name: a combined multi-file patch highlights each
+// file with its own lexer, so the same text under two languages must not collide.
+// The cache is reset whenever the diff is (re)loaded.
+func (m model) highlight(lexer chroma.Lexer, text string) []span {
+	key := text
+	if lexer != nil {
+		key = lexer.Config().Name + "\x00" + text
+	}
 	if m.hlCache != nil {
-		if s, ok := m.hlCache[text]; ok {
+		if s, ok := m.hlCache[key]; ok {
 			return s
 		}
 	}
-	s := tokenizeLine(m.lexer, text)
+	s := tokenizeLine(lexer, text)
 	if m.hlCache != nil {
-		m.hlCache[text] = s
+		m.hlCache[key] = s
 	}
 	return s
 }

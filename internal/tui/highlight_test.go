@@ -38,7 +38,7 @@ func TestRenderCodeWidth(t *testing.T) {
 	}
 	for _, ln := range lines {
 		for _, w := range []int{1, 2, 5, 12, 40, 200} {
-			out := m.renderCode(ln, w, diffAddBg)
+			out := m.renderCode(ln, m.lexer, w, diffAddBg)
 			if got := lipgloss.Width(out); got != w {
 				t.Errorf("renderCode(%q, %d) width = %d, want %d", ln, w, got, w)
 			}

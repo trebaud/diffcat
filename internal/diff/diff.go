@@ -31,13 +31,16 @@ const (
 
 // Line is one parsed diff line. Text excludes the leading +/-/space marker for
 // Add/Del/Context; Hunk and Meta keep their full text. OldNum/NewNum are
-// 1-based line numbers in the old/new file, or 0 when not applicable. Dir/GapID/
-// Hidden are only meaningful on Expand rows.
+// 1-based line numbers in the old/new file, or 0 when not applicable. Path is
+// the file the line belongs to (carried from the surrounding `diff --git`/`+++`
+// headers) so a combined multi-file patch can be syntax-highlighted per file.
+// Dir/GapID/Hidden are only meaningful on Expand rows.
 type Line struct {
 	Kind   Kind
 	Text   string
 	OldNum int
 	NewNum int
+	Path   string
 
 	Dir    Dir // Expand only: which direction this affordance reveals
 	GapID  int // Expand only: index into the gap list it belongs to
@@ -64,34 +67,62 @@ type Row struct {
 	Right *Line
 }
 
-// Parse splits unified diff output into typed lines, tracking line numbers.
+// Parse splits unified diff output into typed lines, tracking line numbers and
+// the file each line belongs to. path follows the `diff --git`/`---`/`+++`
+// headers so a combined multi-file patch (e.g. `git show`) carries a per-line
+// Path the caller can highlight by.
 func Parse(raw string) []Line {
 	var out []Line
 	oldNum, newNum := 0, 0
+	path := ""
 	for _, ln := range strings.Split(raw, "\n") {
+		switch {
+		case strings.HasPrefix(ln, "diff --git"):
+			path = "" // new file section; resolved from the --- / +++ headers
+		case strings.HasPrefix(ln, "--- "), strings.HasPrefix(ln, "+++ "):
+			if p := pathFromHeader(ln); p != "" {
+				path = p
+			}
+		}
 		switch {
 		case strings.HasPrefix(ln, "@@"):
 			oldNum, newNum = parseHunk(ln)
-			out = append(out, Line{Kind: Hunk, Text: ln})
+			out = append(out, Line{Kind: Hunk, Text: ln, Path: path})
 		case isMeta(ln):
-			out = append(out, Line{Kind: Meta, Text: ln})
+			out = append(out, Line{Kind: Meta, Text: ln, Path: path})
 		case strings.HasPrefix(ln, "+"):
-			out = append(out, Line{Kind: Add, Text: ln[1:], NewNum: newNum})
+			out = append(out, Line{Kind: Add, Text: ln[1:], NewNum: newNum, Path: path})
 			newNum++
 		case strings.HasPrefix(ln, "-"):
-			out = append(out, Line{Kind: Del, Text: ln[1:], OldNum: oldNum})
+			out = append(out, Line{Kind: Del, Text: ln[1:], OldNum: oldNum, Path: path})
 			oldNum++
 		case strings.HasPrefix(ln, " "):
-			out = append(out, Line{Kind: Context, Text: ln[1:], OldNum: oldNum, NewNum: newNum})
+			out = append(out, Line{Kind: Context, Text: ln[1:], OldNum: oldNum, NewNum: newNum, Path: path})
 			oldNum++
 			newNum++
 		case ln == "":
 			// Trailing newline from Split — skip.
 		default:
-			out = append(out, Line{Kind: Meta, Text: ln})
+			out = append(out, Line{Kind: Meta, Text: ln, Path: path})
 		}
 	}
 	return out
+}
+
+// pathFromHeader extracts the file path from a `--- a/path` or `+++ b/path`
+// header line, stripping the a//b/ prefix and any trailing tab-delimited
+// timestamp. Returns "" for /dev/null (an added or deleted side).
+func pathFromHeader(ln string) string {
+	s := ln[4:] // after "--- " / "+++ "
+	if i := strings.IndexByte(s, '\t'); i >= 0 {
+		s = s[:i]
+	}
+	if s == "/dev/null" {
+		return ""
+	}
+	s = strings.TrimPrefix(s, "a/")
+	s = strings.TrimPrefix(s, "b/")
+	return s
 }
 
 // SplitRows converts parsed lines into side-by-side rows, pairing each block of

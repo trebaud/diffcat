@@ -92,8 +92,11 @@ type model struct {
 
 	// Syntax highlighting for the selected file: a lexer chosen from its path and
 	// a per-line span cache (reset on every loadDiff so it tracks the lexer).
-	lexer   chroma.Lexer
-	hlCache map[string][]span
+	// pathLexers memoizes per-path lexers for the combined commit-history preview,
+	// whose multi-file patch can't ride a single m.lexer.
+	lexer      chroma.Lexer
+	hlCache    map[string][]span
+	pathLexers map[string]chroma.Lexer
 
 	width  int
 	height int
@@ -193,6 +196,7 @@ func (m *model) loadDiff() {
 	m.splitRows = nil
 	m.lexer = nil
 	m.hlCache = map[string][]span{}
+	m.pathLexers = map[string]chroma.Lexer{}
 	f := m.selectedFile()
 	if f == nil {
 		return
@@ -220,6 +224,29 @@ func (m *model) loadDiff() {
 		}
 	}
 	m.rebuildView()
+}
+
+// lineLexer picks the syntax lexer for one diff line. Single-file views (branch
+// and per-commit drill-in) share m.lexer. The commit-history preview (viewLog)
+// shows a combined multi-file patch, so each line is highlighted with the lexer
+// for its own Path, memoized in pathLexers.
+func (m model) lineLexer(l diff.Line) chroma.Lexer {
+	if m.mode != viewLog {
+		return m.lexer
+	}
+	if l.Path == "" {
+		return nil
+	}
+	if m.pathLexers != nil {
+		if lx, ok := m.pathLexers[l.Path]; ok {
+			return lx
+		}
+	}
+	lx := lexerFor(l.Path)
+	if m.pathLexers != nil {
+		m.pathLexers[l.Path] = lx
+	}
+	return lx
 }
 
 // rebuildView re-derives the display line list (and its split projection) from

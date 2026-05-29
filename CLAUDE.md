@@ -53,8 +53,11 @@ auto-detected base branch.
     (`loadCommitDiff`, memoized per SHA in `commitDiffCache`), `Enter` drills into
     that commit (`enterCommit` → `viewCommit`), `l`/Tab focus the preview to
     scroll it, `Esc`/`L` return to the branch view. Context-expansion is disabled
-    there (the multi-file patch has no single backing file) and the combined diff
-    isn't syntax-lexed.
+    there (the multi-file patch has no single backing file). The combined diff
+    *is* syntax-highlighted, per file: `m.lexer` stays nil, and `renderCode`
+    instead lexes each line with `lineLexer`, which picks a lexer from the line's
+    `Path` (carried by the diff parser from the patch's `+++` headers) and
+    memoizes it in `pathLexers`.
   - `viewCommit` is the per-commit drill-in (GitHub's commit page): the left pane
     is the file tree of just that one commit's changes (`CommitFiles`) and the
     right pane shows the selected file's diff scoped to the commit

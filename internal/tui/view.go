@@ -8,6 +8,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/alecthomas/chroma/v2"
+
 	"github.com/trebaud/sashi/internal/diff"
 	"github.com/trebaud/sashi/internal/git"
 )
@@ -465,7 +467,7 @@ func (m model) renderUnifiedLine(l diff.Line, width int, sel bool) string {
 	if avail < 1 {
 		avail = 1
 	}
-	return gut + m.renderCode(l.Text, avail, bg)
+	return gut + m.renderCode(l.Text, m.lineLexer(l), avail, bg)
 }
 
 // fullRowStyle returns the style for a full-width row, swapping in the selection
@@ -522,7 +524,7 @@ func (m model) renderSplitSide(l *diff.Line, width int, newSide, sel bool) strin
 	if avail < 1 {
 		avail = 1
 	}
-	return gut + m.renderCode(l.Text, avail, bg)
+	return gut + m.renderCode(l.Text, m.lineLexer(*l), avail, bg)
 }
 
 // lineStyles returns the gutter style, the code-body background tint (nil for
@@ -539,10 +541,10 @@ func lineStyles(kind diff.Kind) (num lipgloss.Style, bg color.Color, marker stri
 }
 
 // renderCode renders a line of code into exactly width columns: a leading gutter
-// space, the syntax-highlighted tokens, an ellipsis if it overflows, then padding
-// — all sharing bg so the diff row tint reads as one continuous band beneath the
-// colored tokens.
-func (m model) renderCode(text string, width int, bg color.Color) string {
+// space, the syntax-highlighted tokens (lexed with lexer), an ellipsis if it
+// overflows, then padding — all sharing bg so the diff row tint reads as one
+// continuous band beneath the colored tokens.
+func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg color.Color) string {
 	if width <= 0 {
 		return ""
 	}
@@ -556,7 +558,7 @@ func (m model) renderCode(text string, width int, bg color.Color) string {
 	b.WriteString(base.Render(" ")) // left padding, matching the gutter space
 	used++
 
-	for _, sp := range m.highlight(expandTabs(text)) {
+	for _, sp := range m.highlight(lexer, expandTabs(text)) {
 		if used >= width {
 			break
 		}
