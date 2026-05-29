@@ -82,10 +82,15 @@ auto-detected base branch.
     so `totalDiffRows` drives scroll clamping and the nyan progress.
   - Code bodies are syntax-highlighted (`highlight.go`): a Chroma lexer chosen
     from the file path (`lexerFor`) tokenizes each line into colored `span`s,
-    memoized per line in `hlCache` (reset on `loadDiff`). `renderCode` (view.go)
+    memoized per line in `hlCache` (reset on `loadDiff`). Token colors come from
+    `tokenColor`, a curated GitHub-flavored palette keyed on Chroma's universal
+    token *categories* (keyword/string/number/comment/function/type/…) rather
+    than a per-style table — so coverage is uniform across languages (numbers
+    stay distinct from strings, identifiers don't collapse to a flat default) and
+    `pick` selects the light/dark variant via `applyHighlightTheme`. Adjacent
+    spans sharing a color coalesce. `renderCode` (view.go)
     lays the highlighted tokens over the row's background tint and pads to an
-    exact width; `expandTabs` normalizes tabs so the width math holds. The Chroma
-    style follows light/dark (`applyHighlightTheme`: github / github-dark), and
+    exact width; `expandTabs` normalizes tabs so the width math holds, and
     `lineStyles` returns the per-kind tint that `renderCode` paints beneath the
     tokens.
   - Layout is responsive: proportional list/diff split (list capped at 40 cols),
