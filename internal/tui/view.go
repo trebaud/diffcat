@@ -316,33 +316,55 @@ func (m model) noFileSelection(width int) (title, body string) {
 // diffWindow renders the visible slice of diff rows for the current view mode.
 func (m model) diffWindow(width, rows int) []string {
 	var out []string
+	cursor := m.diffCursor
+	if m.focus != focusDiff {
+		cursor = -1 // only mark the cursor row while the diff pane has focus
+	}
 	if m.splitView {
 		leftW := (width - 1) / 2
 		rightW := width - 1 - leftW
 		end := min(m.diffOffset+rows, len(m.splitRows))
 		for i := m.diffOffset; i < end; i++ {
-			out = append(out, m.renderSplitRow(m.splitRows[i], leftW, rightW))
+			out = append(out, m.renderSplitRow(m.splitRows[i], leftW, rightW, i == cursor))
 		}
 		return out
 	}
-	end := min(m.diffOffset+rows, len(m.diff))
+	end := min(m.diffOffset+rows, len(m.viewLines))
 	for i := m.diffOffset; i < end; i++ {
-		out = append(out, m.renderUnifiedLine(m.diff[i], width))
+		out = append(out, m.renderUnifiedLine(m.viewLines[i], width, i == cursor))
 	}
 	return out
 }
 
+// expandLabel is the text shown on an expand affordance row.
+func expandLabel(l diff.Line) string {
+	switch l.Dir {
+	case diff.ExpandUp:
+		return fmt.Sprintf("  ↑ expand (%d hidden)", l.Hidden)
+	case diff.ExpandDown:
+		return fmt.Sprintf("  ↓ expand (%d hidden)", l.Hidden)
+	default:
+		return fmt.Sprintf("  ↕ expand %d hidden lines", l.Hidden)
+	}
+}
+
 // renderUnifiedLine renders one inline-diff row: "old new ± code" with the whole
-// row tinted green (add) or red (del), GitHub-style.
-func (m model) renderUnifiedLine(l diff.Line, width int) string {
+// row tinted green (add) or red (del), GitHub-style. sel marks the cursor row,
+// which is painted with the selection background instead of its kind tint.
+func (m model) renderUnifiedLine(l diff.Line, width int, sel bool) string {
 	switch l.Kind {
 	case diff.Hunk:
-		return hunkLineStyle.Width(width).Render(truncateText(l.Text, width))
+		return fullRowStyle(hunkLineStyle, sel).Width(width).Render(truncateText(l.Text, width))
 	case diff.Meta:
-		return metaLineStyle.Width(width).Render(truncateText(l.Text, width))
+		return fullRowStyle(metaLineStyle, sel).Width(width).Render(truncateText(l.Text, width))
+	case diff.Expand:
+		return fullRowStyle(expandLineStyle, sel).Width(width).Render(truncateText(expandLabel(l), width))
 	}
 
 	numStyle, bg, marker := lineStyles(l.Kind)
+	if sel {
+		numStyle, bg = selectedRowStyle, colRowBg
+	}
 	d := m.lineDigits
 	gut := numStyle.Render(numField(l.OldNum, d) + " " + numField(l.NewNum, d) + " " + marker)
 	avail := width - lipgloss.Width(gut)
@@ -352,31 +374,51 @@ func (m model) renderUnifiedLine(l diff.Line, width int) string {
 	return gut + m.renderCode(l.Text, avail, bg)
 }
 
+// fullRowStyle returns the style for a full-width row, swapping in the selection
+// background when the row is under the cursor.
+func fullRowStyle(base lipgloss.Style, sel bool) lipgloss.Style {
+	if sel {
+		return base.Background(colRowBg)
+	}
+	return base
+}
+
 // renderSplitRow renders one side-by-side row: old/del on the left, new/add on
-// the right, divided by a vertical rule. Hunk/Meta rows span the full width.
-func (m model) renderSplitRow(r diff.Row, leftW, rightW int) string {
+// the right, divided by a vertical rule. Hunk/Meta/Expand rows span the full
+// width. sel marks the cursor row.
+func (m model) renderSplitRow(r diff.Row, leftW, rightW int, sel bool) string {
 	if r.Full != nil {
 		w := leftW + 1 + rightW
-		if r.Full.Kind == diff.Hunk {
-			return hunkLineStyle.Width(w).Render(truncateText(r.Full.Text, w))
+		switch r.Full.Kind {
+		case diff.Hunk:
+			return fullRowStyle(hunkLineStyle, sel).Width(w).Render(truncateText(r.Full.Text, w))
+		case diff.Expand:
+			return fullRowStyle(expandLineStyle, sel).Width(w).Render(truncateText(expandLabel(*r.Full), w))
+		default:
+			return fullRowStyle(metaLineStyle, sel).Width(w).Render(truncateText(r.Full.Text, w))
 		}
-		return metaLineStyle.Width(w).Render(truncateText(r.Full.Text, w))
 	}
-	left := m.renderSplitSide(r.Left, leftW, false)
-	right := m.renderSplitSide(r.Right, rightW, true)
+	left := m.renderSplitSide(r.Left, leftW, false, sel)
+	right := m.renderSplitSide(r.Right, rightW, true, sel)
 	return left + borderStyle.Render("│") + right
 }
 
 // renderSplitSide renders one half of a split row. A nil line is an empty paired
 // slot, filled with a faint background so the gap reads as intentional.
-func (m model) renderSplitSide(l *diff.Line, width int, newSide bool) string {
+func (m model) renderSplitSide(l *diff.Line, width int, newSide, sel bool) string {
 	if width < 1 {
 		return ""
 	}
 	if l == nil {
+		if sel {
+			return selectedRowStyle.Width(width).Render("")
+		}
 		return fillerStyle.Width(width).Render("")
 	}
 	numStyle, bg, _ := lineStyles(l.Kind)
+	if sel {
+		numStyle, bg = selectedRowStyle, colRowBg
+	}
 	num := l.OldNum
 	if newSide {
 		num = l.NewNum
@@ -545,7 +587,7 @@ func (m model) paneHeading(text string, pane focusPane) string {
 
 func (m model) footerView() string {
 	keys := []string{
-		"j/k move", "h/l ⇄ pane", "↵ open/fold", "gg/G top/bot", "C-d/C-u half", "s split", "t theme", "r refresh", "? help", "q quit",
+		"j/k move", "h/l ⇄ pane", "↵ open/fold/expand", "gg/G top/bot", "C-d/C-u half", "s split", "t theme", "r refresh", "? help", "q quit",
 	}
 	return mutedStyle.Render(strings.Join(keys, "  ·  "))
 }
@@ -557,13 +599,16 @@ func (m model) helpView() string {
 		headingStyle.Render("  panes"),
 		"  h / l        focus file list / diff pane",
 		"  Tab          toggle focused pane",
-		"  Enter / o    open file's diff, or fold/unfold a folder",
+		"  Enter / o    open file's diff / fold a folder / expand context",
 		"",
 		headingStyle.Render("  motions (act on the focused pane)"),
-		"  j / k        down / up one line",
+		"  j / k        move cursor down / up one line",
 		"  gg / G       jump to top / bottom",
 		"  ctrl+d / u   half page down / up",
 		"  ctrl+f / b   full page down / up",
+		"",
+		headingStyle.Render("  diff"),
+		"  ↵ / o on  ↕  expand hidden context (↓ below, ↑ above)",
 		"",
 		headingStyle.Render("  view"),
 		"  s            toggle unified / side-by-side",

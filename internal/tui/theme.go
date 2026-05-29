@@ -51,12 +51,13 @@ var (
 	// marker, tinted in the accent color); the code body is rendered by renderCode
 	// with the row's background tint (diffAddBg/diffDelBg) so syntax-highlighted
 	// tokens sit on one continuous band.
-	addNumStyle   lipgloss.Style
-	delNumStyle   lipgloss.Style
-	ctxNumStyle   lipgloss.Style
-	hunkLineStyle lipgloss.Style
-	metaLineStyle lipgloss.Style
-	fillerStyle   lipgloss.Style // empty paired side in split view
+	addNumStyle     lipgloss.Style
+	delNumStyle     lipgloss.Style
+	ctxNumStyle     lipgloss.Style
+	hunkLineStyle   lipgloss.Style
+	metaLineStyle   lipgloss.Style
+	expandLineStyle lipgloss.Style // "expand hidden context" affordance rows
+	fillerStyle     lipgloss.Style // empty paired side in split view
 
 	diffAddBg color.Color // row tint behind added lines
 	diffDelBg color.Color // row tint behind removed lines
@@ -117,6 +118,7 @@ func ApplyTheme(isDark bool) {
 	ctxNumStyle = lipgloss.NewStyle().Foreground(colMuted)
 	hunkLineStyle = lipgloss.NewStyle().Background(hunkBg).Foreground(hunkFg).Bold(true)
 	metaLineStyle = lipgloss.NewStyle().Foreground(colMuted)
+	expandLineStyle = lipgloss.NewStyle().Background(fillBg).Foreground(hunkFg)
 	fillerStyle = lipgloss.NewStyle().Background(fillBg)
 
 	// Syntax-highlight palette tracks the same light/dark choice.

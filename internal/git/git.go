@@ -184,6 +184,36 @@ func untracked(repo string) []string {
 	return paths
 }
 
+// FileContent reads the working-tree file (the new side of the diff) split into
+// lines, with the same newline and binary semantics as countLines so its length
+// matches the diff's line numbers. The trailing element of a newline-terminated
+// file is dropped; a final line without a newline is kept. CR bytes are left in
+// place so revealed context matches the diffed text byte-for-byte.
+func FileContent(repo, path string) ([]string, error) {
+	data, err := os.ReadFile(filepath.Join(repo, path))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 0 {
+		head := data
+		if len(head) > 8000 {
+			head = head[:8000]
+		}
+		if strings.IndexByte(string(head), 0) >= 0 {
+			return nil, fmt.Errorf("binary file: %s", path)
+		}
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	content := string(data)
+	lines := strings.Split(content, "\n")
+	if strings.HasSuffix(content, "\n") {
+		lines = lines[:len(lines)-1] // drop the empty element after the final newline
+	}
+	return lines, nil
+}
+
 // countLines returns (lineCount, 0) for a new file, or (-1, -1) if unreadable
 // or apparently binary (contains a NUL byte in the first chunk).
 func countLines(path string) (int, int) {

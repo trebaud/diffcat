@@ -43,13 +43,22 @@ type model struct {
 	cursor    int
 	collapsed map[string]bool
 
-	// Parsed diff for the selected file, plus the side-by-side projection and
-	// the scroll position. lineDigits sizes the line-number gutter.
+	// Pristine parsed diff for the selected file (never mutated), the new-side
+	// file content, and the hidden-context gaps within it. revealed records how
+	// far each gap has been expanded ([fromTop, fromBottom] per gap index). diff
+	// stays pristine; viewLines is the derived display list — pristine lines
+	// interleaved with revealed context and expand affordances — and splitRows is
+	// its side-by-side projection. lineDigits sizes the line-number gutter.
 	diff       []diff.Line
+	fileLines  []string
+	gaps       []diff.Gap
+	revealed   map[int][2]int
+	viewLines  []diff.Line
 	splitRows  []diff.Row
 	splitView  bool // false = unified (GitHub inline), true = side-by-side
 	lineDigits int
 	diffOffset int
+	diffCursor int // selected row in the diff pane (index into viewLines/splitRows)
 
 	// Syntax highlighting for the selected file: a lexer chosen from its path and
 	// a per-line span cache (reset on every loadDiff so it tracks the lexer).
@@ -129,11 +138,21 @@ func (m model) selectedFile() *git.FileChange {
 	return nil
 }
 
-// loadDiff fetches and parses the diff for the file under the cursor, building
-// the side-by-side projection and resetting the scroll position.
+// expandWindow is how many context lines one expand press reveals, and the gap
+// size at or below which a gap collapses to a single "expand all" affordance.
+const expandWindow = 20
+
+// loadDiff fetches and parses the diff for the file under the cursor, loads its
+// new-side content for context expansion, and derives the display view, resetting
+// scroll and the diff cursor.
 func (m *model) loadDiff() {
 	m.diffOffset = 0
+	m.diffCursor = 0
 	m.diff = nil
+	m.fileLines = nil
+	m.gaps = nil
+	m.revealed = map[int][2]int{}
+	m.viewLines = nil
 	m.splitRows = nil
 	m.lexer = nil
 	m.hlCache = map[string][]span{}
@@ -148,8 +167,26 @@ func (m *model) loadDiff() {
 	} else {
 		m.diff = diff.Parse(raw)
 	}
-	m.splitRows = diff.SplitRows(m.diff)
-	m.lineDigits = lineDigits(m.diff)
+	// The new side is the working tree; a pure deletion has none, so it has no
+	// context to expand. A binary/unreadable file yields no gaps either.
+	if f.Status != "D" {
+		if fl, err := git.FileContent(m.repo, f.Path); err == nil {
+			m.fileLines = fl
+			m.gaps = diff.Gaps(m.diff, len(fl))
+		}
+	}
+	m.rebuildView()
+}
+
+// rebuildView re-derives the display line list (and its split projection) from
+// the pristine diff plus the current expansion state, then re-clamps scroll and
+// cursor. Called on load, on every expansion, and on a split toggle.
+func (m *model) rebuildView() {
+	m.viewLines = diff.BuildView(m.diff, m.fileLines, m.gaps, m.revealed, expandWindow)
+	m.splitRows = diff.SplitRows(m.viewLines)
+	m.lineDigits = lineDigits(m.viewLines)
+	m.clampDiffOffset()
+	m.clampDiffCursor()
 }
 
 // totalDiffRows is the number of scrollable rows in the current view mode.
@@ -157,7 +194,7 @@ func (m model) totalDiffRows() int {
 	if m.splitView {
 		return len(m.splitRows)
 	}
-	return len(m.diff)
+	return len(m.viewLines)
 }
 
 // lineDigits sizes the line-number gutter from the largest line number, clamped
@@ -209,4 +246,44 @@ func (m *model) clampDiffOffset() {
 	if m.diffOffset < 0 {
 		m.diffOffset = 0
 	}
+}
+
+func (m *model) clampDiffCursor() {
+	if m.diffCursor >= m.totalDiffRows() {
+		m.diffCursor = m.totalDiffRows() - 1
+	}
+	if m.diffCursor < 0 {
+		m.diffCursor = 0
+	}
+}
+
+// ensureCursorVisible scrolls the diff pane just enough to keep the cursor row
+// inside the viewport.
+func (m *model) ensureCursorVisible() {
+	if m.diffCursor < m.diffOffset {
+		m.diffOffset = m.diffCursor
+	}
+	if bottom := m.diffOffset + m.diffViewportHeight() - 1; m.diffCursor > bottom {
+		m.diffOffset = m.diffCursor - m.diffViewportHeight() + 1
+	}
+	m.clampDiffOffset()
+}
+
+// cursorLine returns the diff line under the cursor in the current view mode, or
+// nil when there is none. In split mode it reaches through to the row's Full
+// line (the only kind an expand affordance occupies).
+func (m model) cursorLine() *diff.Line {
+	if m.diffCursor < 0 {
+		return nil
+	}
+	if m.splitView {
+		if m.diffCursor < len(m.splitRows) {
+			return m.splitRows[m.diffCursor].Full
+		}
+		return nil
+	}
+	if m.diffCursor < len(m.viewLines) {
+		return &m.viewLines[m.diffCursor]
+	}
+	return nil
 }

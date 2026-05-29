@@ -5,6 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/trebaud/diff-master/internal/diff"
 	"github.com/trebaud/diff-master/internal/git"
 )
 
@@ -26,6 +27,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.clampDiffOffset()
+		m.clampDiffCursor()
+		m.ensureCursorVisible()
 		return m, nil
 
 	case tickMsg:
@@ -72,9 +75,12 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "s":
 		// Toggle unified ↔ side-by-side. Row counts differ between modes, so
-		// reset to the top to keep the scroll position sensible.
+		// reset to the top to keep the scroll position sensible. Expansions are
+		// about which lines are revealed, not layout, so they're preserved.
 		m.splitView = !m.splitView
 		m.diffOffset = 0
+		m.diffCursor = 0
+		m.rebuildView()
 		return m, nil
 
 	case "t":
@@ -92,6 +98,13 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.focus = focusDiff
 		return m, nil
 	case "enter", "o":
+		// In the diff pane, on an expand affordance: reveal hidden context.
+		if m.focus == focusDiff {
+			if l := m.cursorLine(); l != nil && l.Kind == diff.Expand {
+				m.expandUnderCursor(*l)
+			}
+			return m, nil
+		}
 		// On a folder: fold/unfold it. On a file: open its diff and move into
 		// the diff pane.
 		if r := m.selectedRow(); r != nil && r.isDir {
@@ -115,18 +128,18 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.gotoBottom()
 		return m, nil
 
-	// --- diff paging (always acts on the diff pane) ---
+	// --- diff paging (always moves the diff cursor by a page) ---
 	case "ctrl+d":
-		m.scrollDiff(m.diffViewportHeight() / 2)
+		m.moveDiffCursor(m.diffViewportHeight() / 2)
 		return m, nil
 	case "ctrl+u":
-		m.scrollDiff(-m.diffViewportHeight() / 2)
+		m.moveDiffCursor(-m.diffViewportHeight() / 2)
 		return m, nil
 	case "ctrl+f", "pgdown", " ":
-		m.scrollDiff(m.diffViewportHeight())
+		m.moveDiffCursor(m.diffViewportHeight())
 		return m, nil
 	case "ctrl+b", "pgup":
-		m.scrollDiff(-m.diffViewportHeight())
+		m.moveDiffCursor(-m.diffViewportHeight())
 		return m, nil
 	}
 	return m, nil
@@ -151,12 +164,12 @@ func (m *model) toggleFocus() {
 }
 
 // moveDown/moveUp dispatch j/k to the focused pane: file selection on the
-// left, line-wise diff scrolling on the right.
+// left, the line cursor on the right.
 func (m *model) moveDown() {
 	if m.focus == focusFiles {
 		m.moveCursor(1)
 	} else {
-		m.scrollDiff(1)
+		m.moveDiffCursor(1)
 	}
 }
 
@@ -164,7 +177,7 @@ func (m *model) moveUp() {
 	if m.focus == focusFiles {
 		m.moveCursor(-1)
 	} else {
-		m.scrollDiff(-1)
+		m.moveDiffCursor(-1)
 	}
 }
 
@@ -174,7 +187,8 @@ func (m *model) gotoTop() {
 		m.loadDiff()
 		return
 	}
-	m.diffOffset = 0
+	m.diffCursor = 0
+	m.ensureCursorVisible()
 }
 
 func (m *model) gotoBottom() {
@@ -183,13 +197,32 @@ func (m *model) gotoBottom() {
 		m.loadDiff()
 		return
 	}
-	m.diffOffset = m.totalDiffRows()
-	m.clampDiffOffset()
+	m.diffCursor = m.totalDiffRows() - 1
+	m.ensureCursorVisible()
 }
 
-func (m *model) scrollDiff(delta int) {
-	m.diffOffset += delta
-	m.clampDiffOffset()
+// moveDiffCursor moves the diff-pane line cursor and scrolls to keep it visible.
+func (m *model) moveDiffCursor(delta int) {
+	m.diffCursor += delta
+	m.clampDiffCursor()
+	m.ensureCursorVisible()
+}
+
+// expandUnderCursor reveals the next window of hidden context for the gap under
+// the cursor: downward (or "all") grows the revealed block from the top, upward
+// grows it from the bottom. The view is rebuilt and the cursor held in place.
+func (m *model) expandUnderCursor(l diff.Line) {
+	if l.GapID < 0 || l.GapID >= len(m.gaps) {
+		return
+	}
+	rev := m.revealed[l.GapID]
+	if l.Dir == diff.ExpandUp {
+		rev[1] += expandWindow
+	} else {
+		rev[0] += expandWindow
+	}
+	m.revealed[l.GapID] = rev
+	m.rebuildView()
 }
 
 func (m *model) moveCursor(delta int) {

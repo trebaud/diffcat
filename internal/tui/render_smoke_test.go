@@ -47,8 +47,16 @@ func sampleModel() model {
 		}
 	}
 	m.diff = diff.Parse(sampleRaw)
-	m.splitRows = diff.SplitRows(m.diff)
-	m.lineDigits = lineDigits(m.diff)
+	// A working-tree file longer than the hunk so there are hidden regions both
+	// before (lines 1..9) and after the change — exercising the Expand rows.
+	fileLines := make([]string, 30)
+	for i := range fileLines {
+		fileLines[i] = "a context line of source code that is quite long, definitely wider than a narrow pane"
+	}
+	m.fileLines = fileLines
+	m.gaps = diff.Gaps(m.diff, len(fileLines))
+	m.revealed = map[int][2]int{}
+	m.rebuildView()
 	return m
 }
 
