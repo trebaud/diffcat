@@ -27,7 +27,7 @@ func Run(dir, baseName string) error {
 	if baseName == "" {
 		baseName = git.DefaultBranch(repo)
 	}
-	base := git.MergeBase(repo, baseName)
+	base := git.BaseRef(repo, baseName)
 
 	files, err := git.ChangedFiles(repo, base)
 	if err != nil {

@@ -68,6 +68,31 @@ func MergeBase(repo, base string) string {
 	return base
 }
 
+// isBranch reports whether ref names a local or remote-tracking branch.
+func isBranch(repo, ref string) bool {
+	for _, full := range []string{"refs/heads/" + ref, "refs/remotes/" + ref} {
+		if exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", full).Run() == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// BaseRef resolves the ref to diff against for the user-supplied base.
+//
+// For a branch, it returns the merge base with HEAD so the diff shows what the
+// current branch added rather than changes that have since landed on the
+// branch. For a commit, tag, or other commit-ish (e.g. a raw SHA or HEAD~3),
+// the ref is returned verbatim so the diff compares directly against exactly
+// that point — using a merge base there would silently compare against a
+// different commit and surprise the user.
+func BaseRef(repo, base string) string {
+	if isBranch(repo, base) {
+		return MergeBase(repo, base)
+	}
+	return base
+}
+
 // FileChange describes one path that differs between the base and the working tree.
 type FileChange struct {
 	Path    string

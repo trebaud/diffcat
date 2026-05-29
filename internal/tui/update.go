@@ -242,7 +242,7 @@ func (m *model) moveCursor(delta int) {
 // refresh recomputes the base and reloads the changed-file list from disk so
 // the view reflects edits made since launch.
 func (m *model) refresh() {
-	m.base = git.MergeBase(m.repo, m.baseName)
+	m.base = git.BaseRef(m.repo, m.baseName)
 	if files, err := git.ChangedFiles(m.repo, m.base); err == nil {
 		m.files = files
 		m.rebuildTree()

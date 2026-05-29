@@ -82,8 +82,8 @@ func filesCmd(base *string) *cobra.Command {
 			if b == "" {
 				b = git.DefaultBranch(repo)
 			}
-			mb := git.MergeBase(repo, b)
-			files, err := git.ChangedFiles(repo, mb)
+			ref := git.BaseRef(repo, b)
+			files, err := git.ChangedFiles(repo, ref)
 			if err != nil {
 				return err
 			}
