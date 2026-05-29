@@ -37,9 +37,6 @@ func (m model) render() string {
 		return m.helpView()
 	}
 
-	header := m.headerView()
-	footer := m.footerView()
-
 	// Proportional split with a cap: the file list takes ~35% but never grows
 	// past 40 cols (lists don't benefit from more) nor shrinks below 22.
 	listWidth := m.width * 35 / 100
@@ -51,13 +48,24 @@ func (m model) render() string {
 	}
 	diffWidth := m.width - listWidth - 1
 
-	list := m.listView(listWidth)
-	diff := m.diffView(diffWidth)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, list, borderStyle.Render(" "), diff)
+	// The body fills everything between the one-line header and footer. We pin
+	// both panes and the divider to that exact height so the TUI occupies the
+	// whole terminal — empty regions are still part of a full-height pane, not
+	// dead space the layout leaves behind.
+	bodyHeight := m.height - 2
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
+	fill := lipgloss.NewStyle().Height(bodyHeight).MaxHeight(bodyHeight)
 
-	// Clamp the single-line chrome so it can never wrap and shove the body down.
-	clamp := lipgloss.NewStyle().MaxWidth(m.width)
-	return strings.Join([]string{clamp.Render(header), body, clamp.Render(footer)}, "\n")
+	list := fill.Render(m.listView(listWidth))
+	diff := fill.Render(m.diffView(diffWidth))
+	body := lipgloss.JoinHorizontal(lipgloss.Top, list, m.divider(bodyHeight), diff)
+
+	// The chrome rows span the full width: truncate (never wrap) then pad.
+	header := padLine(m.headerView(), m.width)
+	footer := padLine(m.footerView(), m.width)
+	return strings.Join([]string{header, body, footer}, "\n")
 }
 
 func (m model) headerView() string {
@@ -72,6 +80,30 @@ func (m model) headerView() string {
 		stat = "  " + headingStyle.Render(m.shortstat)
 	}
 	return left + mid + stat
+}
+
+// padLine truncates a single styled line to width (without wrapping) and pads
+// it with trailing spaces so it spans exactly width columns.
+func padLine(s string, width int) string {
+	s = lipgloss.NewStyle().MaxWidth(width).Render(s)
+	if gap := width - lipgloss.Width(s); gap > 0 {
+		s += strings.Repeat(" ", gap)
+	}
+	return s
+}
+
+// divider is a full-height vertical rule between the two panes so the split is
+// visible all the way down the screen, not just where content happens to reach.
+func (m model) divider(height int) string {
+	if height < 1 {
+		height = 1
+	}
+	bar := borderStyle.Render("│")
+	rows := make([]string, height)
+	for i := range rows {
+		rows[i] = bar
+	}
+	return strings.Join(rows, "\n")
 }
 
 func branchLabel(b string) string {

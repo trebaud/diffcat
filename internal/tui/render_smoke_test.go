@@ -46,6 +46,24 @@ func TestRenderNoWrap(t *testing.T) {
 	}
 }
 
+// TestFullScreenFill guards that the TUI occupies the entire terminal: exactly
+// one rendered line per row, and every line spans the full width.
+func TestFullScreenFill(t *testing.T) {
+	m := sampleModel()
+	for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 24}, {80, 24}, {70, 16}, {60, 12}} {
+		m.width, m.height = sz[0], sz[1]
+		lines := strings.Split(m.render(), "\n")
+		if len(lines) != sz[1] {
+			t.Errorf("%dx%d: %d lines, want %d (TUI must fill the height)", sz[0], sz[1], len(lines), sz[1])
+		}
+		for i, line := range lines {
+			if w := lipgloss.Width(line); w != sz[0] {
+				t.Errorf("%dx%d line %d width %d, want %d (TUI must fill the width)", sz[0], sz[1], i, w, sz[0])
+			}
+		}
+	}
+}
+
 // TestTooSmallGate verifies the resize hint replaces the body below the minimum.
 func TestTooSmallGate(t *testing.T) {
 	m := sampleModel()
