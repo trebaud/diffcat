@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/trebaud/diff-master/internal/diff"
+	"github.com/trebaud/sashi/internal/diff"
 )
 
 // firstExpand returns the index of the first expand affordance in the unified

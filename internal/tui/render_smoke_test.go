@@ -6,8 +6,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 
-	"github.com/trebaud/diff-master/internal/diff"
-	"github.com/trebaud/diff-master/internal/git"
+	"github.com/trebaud/sashi/internal/diff"
+	"github.com/trebaud/sashi/internal/git"
 )
 
 const sampleRaw = `diff --git a/view.go b/view.go

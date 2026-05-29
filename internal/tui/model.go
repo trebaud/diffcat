@@ -7,8 +7,8 @@ import (
 
 	"github.com/alecthomas/chroma/v2"
 
-	"github.com/trebaud/diff-master/internal/diff"
-	"github.com/trebaud/diff-master/internal/git"
+	"github.com/trebaud/sashi/internal/diff"
+	"github.com/trebaud/sashi/internal/git"
 )
 
 // focusPane identifies which of the two panes vim motions (j/k/gg/G) act on.

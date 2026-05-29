@@ -8,7 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/trebaud/diff-master/internal/diff"
+	"github.com/trebaud/sashi/internal/diff"
 )
 
 // View renders the full screen: a header bar, the file list beside the diff
@@ -77,7 +77,7 @@ func (m model) headerView() string {
 	if base == "" {
 		base = "base"
 	}
-	left := titleStyle.Render("diff-master")
+	left := titleStyle.Render("sashi")
 	mid := mutedStyle.Render(fmt.Sprintf("  %s ← %s", branchLabel(m.branch), base))
 	stat := ""
 	if m.shortstat != "" {
@@ -594,7 +594,7 @@ func (m model) footerView() string {
 
 func (m model) helpView() string {
 	lines := []string{
-		titleStyle.Render("diff-master — vim keybindings"),
+		titleStyle.Render("sashi — vim keybindings"),
 		"",
 		headingStyle.Render("  panes"),
 		"  h / l        focus file list / diff pane",

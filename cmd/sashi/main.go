@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/trebaud/diff-master/internal/git"
-	"github.com/trebaud/diff-master/internal/tui"
+	"github.com/trebaud/sashi/internal/git"
+	"github.com/trebaud/sashi/internal/tui"
 )
 
 // version is set at build time via -ldflags "-X main.ldflagsVersion=$(git describe --tags)",
@@ -41,7 +41,7 @@ func rootCmd() *cobra.Command {
 	var base string
 
 	root := &cobra.Command{
-		Use:           "diff-master [path]",
+		Use:           "sashi [path]",
 		Short:         "Visualize the git diff of the current branch against master",
 		Version:       version,
 		SilenceUsage:  true,
@@ -56,7 +56,7 @@ func rootCmd() *cobra.Command {
 		},
 	}
 	root.PersistentFlags().StringVarP(&base, "base", "b", "", "Base ref to diff against (default: auto-detect master/main)")
-	root.SetVersionTemplate("diff-master v{{.Version}}\n")
+	root.SetVersionTemplate("sashi v{{.Version}}\n")
 	root.Flags().BoolP("version", "v", false, "Show version")
 
 	root.AddCommand(filesCmd(&base))

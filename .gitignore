@@ -12,6 +12,6 @@ Thumbs.db
 *.log
 
 # Build artifacts
-/diff-master
+/sashi
 bin
 dist

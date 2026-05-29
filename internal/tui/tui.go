@@ -1,4 +1,4 @@
-// Package tui renders diff-master's interactive terminal UI following the Elm
+// Package tui renders sashi's interactive terminal UI following the Elm
 // architecture. Each concern lives in its own file:
 //
 //   - model.go   state, Init, helpers
@@ -13,7 +13,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/trebaud/diff-master/internal/git"
+	"github.com/trebaud/sashi/internal/git"
 )
 
 // Run computes the diff of the repo at dir against baseName and launches the

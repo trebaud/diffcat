@@ -1,4 +1,4 @@
-// Package git wraps the git CLI for the operations diff-master needs:
+// Package git wraps the git CLI for the operations sashi needs:
 // resolving the base branch, listing changed files against it, and producing
 // per-file diffs. Everything shells out to git so we inherit the user's config.
 package git

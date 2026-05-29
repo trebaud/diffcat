@@ -5,8 +5,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/trebaud/diff-master/internal/diff"
-	"github.com/trebaud/diff-master/internal/git"
+	"github.com/trebaud/sashi/internal/diff"
+	"github.com/trebaud/sashi/internal/git"
 )
 
 // tickMsg drives the nyan cat's wiggle. ~7fps is enough for a charming gait

@@ -1,4 +1,4 @@
-module github.com/trebaud/diff-master
+module github.com/trebaud/sashi
 
 go 1.26.1
 
