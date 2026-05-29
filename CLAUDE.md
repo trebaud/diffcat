@@ -3,9 +3,9 @@
 ## Commands
 
 ```bash
-go build -o sashi ./cmd/sashi   # Build
-go run ./cmd/sashi                     # Run against the current repo
-go run ./cmd/sashi files               # Non-interactive file list
+go build -o diffcat ./cmd/diffcat   # Build
+go run ./cmd/diffcat                     # Run against the current repo
+go run ./cmd/diffcat files               # Non-interactive file list
 go test ./...                                # Run tests (TUI render invariants)
 go vet ./...                                 # Vet
 ```
@@ -14,7 +14,7 @@ go vet ./...                                 # Vet
 
 A CLI/TUI that visualizes the current branch's diff against master (or main).
 
-Entry point is `cmd/sashi/main.go` — Cobra root command launches the TUI;
+Entry point is `cmd/diffcat/main.go` — Cobra root command launches the TUI;
 the `files` subcommand prints a non-interactive list. `--base` overrides the
 auto-detected base branch.
 

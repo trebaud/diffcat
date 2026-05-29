@@ -1,12 +1,13 @@
-# sashi
+# diffcat
 
 [![Go](https://img.shields.io/badge/go-1.21%2B-00ADD8?logo=go)](https://go.dev)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
-[![Release](https://img.shields.io/github/v/release/trebaud/sashi)](https://github.com/trebaud/sashi/releases)
+[![Release](https://img.shields.io/github/v/release/trebaud/diffcat)](https://github.com/trebaud/diffcat/releases)
 
 A terminal UI for reviewing your branch's diff against `master` (or `main`) —
 a collapsible file tree on the left, a colorized, syntax-highlighted diff on the
-right. *sashi* (差し) means "difference" in Japanese.
+right. *diffcat* is `cat` for diffs — point it at a repo and it shows what your
+branch changed.
 
 ## Features
 
@@ -20,13 +21,13 @@ right. *sashi* (差し) means "difference" in Japanese.
 ## Install
 
 ```bash
-go install github.com/trebaud/sashi/cmd/sashi@latest   # needs $(go env GOPATH)/bin on $PATH
+go install github.com/trebaud/diffcat/cmd/diffcat@latest   # needs $(go env GOPATH)/bin on $PATH
 ```
 
 From source:
 
 ```bash
-git clone https://github.com/trebaud/sashi.git && cd sashi && ./scripts/install.sh
+git clone https://github.com/trebaud/diffcat.git && cd diffcat && ./scripts/install.sh
 ```
 
 Requires Go 1.21+ and Git.
@@ -35,7 +36,7 @@ Requires Go 1.21+ and Git.
 
 ```bash
 cd your-repo
-sashi
+diffcat
 ```
 
 Launches the TUI against the auto-detected base branch. Navigation is vim-like
@@ -44,19 +45,19 @@ Launches the TUI against the auto-detected base branch. Navigation is vim-like
 ## Commands
 
 ```bash
-sashi [path] [--base <ref>]         # launch the TUI (path defaults to .)
-sashi files [path] [--base <ref>]   # print the changed-file list, non-interactive
-sashi --version
+diffcat [path] [--base <ref>]         # launch the TUI (path defaults to .)
+diffcat files [path] [--base <ref>]   # print the changed-file list, non-interactive
+diffcat --version
 ```
 
 **`--base, -b <ref>`** overrides the base. It accepts any git ref — branch, remote
 branch, tag, or commit:
 
 ```bash
-sashi -b develop
-sashi -b origin/main
-sashi -b v1.2.0
-sashi -b 3f9a1c2
+diffcat -b develop
+diffcat -b origin/main
+diffcat -b v1.2.0
+diffcat -b 3f9a1c2
 ```
 
 Without `--base`, the base is auto-detected: `origin/HEAD`, else `master`, else `main`.

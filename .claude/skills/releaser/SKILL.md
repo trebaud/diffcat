@@ -1,15 +1,15 @@
 ---
 name: releaser
 description: >
-  Create a new sashi release: build cross-platform artifacts with scripts/releaser.sh,
+  Create a new diffcat release: build cross-platform artifacts with scripts/releaser.sh,
   generate a changelog since the previous tag, and publish a GitHub release via gh.
   Use when the user says "release", "cut a release", "publish v1.x", or "new version".
 allowed-tools: Bash
 ---
 
-# Release sashi
+# Release diffcat
 
-Create a new GitHub release for the sashi project.
+Create a new GitHub release for the diffcat project.
 
 ## Arguments
 
@@ -94,7 +94,7 @@ Format the notes as:
 - bug: <what was broken and is now fixed>
 ...
 
-**Full changelog**: https://github.com/trebaud/sashi/compare/<PREV_TAG>...<NEW_VERSION>
+**Full changelog**: https://github.com/trebaud/diffcat/compare/<PREV_TAG>...<NEW_VERSION>
 ```
 
 If no commits pass the user-facing filter, write "No user-facing changes in this release."
@@ -115,4 +115,4 @@ Print the release URL when done.
 bash scripts/deploy.sh
 ```
 
-This confirms `go install github.com/trebaud/sashi/cmd/sashi@latest` resolves the new tag. Propagation can take a minute — re-run if it reports the proxy hasn't picked it up yet.
+This confirms `go install github.com/trebaud/diffcat/cmd/diffcat@latest` resolves the new tag. Propagation can take a minute — re-run if it reports the proxy hasn't picked it up yet.

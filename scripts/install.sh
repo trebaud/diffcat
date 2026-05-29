@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# sashi installer
-# Usage: git clone ... && cd sashi && ./scripts/install.sh
+# diffcat installer
+# Usage: git clone ... && cd diffcat && ./scripts/install.sh
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -14,7 +14,7 @@ RESET='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-BIN_NAME="sashi"
+BIN_NAME="diffcat"
 GO_MIN_VERSION="1.21"
 
 info()  { printf "${CYAN}[*]${RESET} %s\n" "$*"; }
@@ -84,12 +84,12 @@ check_go() {
 # -------------------------------------------------------------------
 
 build_binary() {
-  info "Building sashi..."
+  info "Building diffcat..."
   cd "$REPO_ROOT"
   mkdir -p bin
   local version
   version="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
-  go build -ldflags "-X main.ldflagsVersion=${version#v}" -o bin/"$BIN_NAME" ./cmd/sashi
+  go build -ldflags "-X main.ldflagsVersion=${version#v}" -o bin/"$BIN_NAME" ./cmd/diffcat
   ok "Binary built: bin/$BIN_NAME (v${version#v})"
 }
 
@@ -138,9 +138,9 @@ echo ""
 printf "${GREEN}${BOLD}  Installation complete!${RESET}\n"
 echo ""
 printf "  ${BOLD}Run it:${RESET}\n"
-printf "    ${CYAN}sashi${RESET}                  # diff the current repo against master/main\n"
-printf "    ${CYAN}sashi --base develop${RESET}   # diff against a specific base ref\n"
-printf "    ${CYAN}sashi files${RESET}            # non-interactive changed-file list\n"
+printf "    ${CYAN}diffcat${RESET}                  # diff the current repo against master/main\n"
+printf "    ${CYAN}diffcat --base develop${RESET}   # diff against a specific base ref\n"
+printf "    ${CYAN}diffcat files${RESET}            # non-interactive changed-file list\n"
 echo ""
 printf "  ${DIM}Source: $REPO_ROOT${RESET}\n"
 printf "  ${DIM}Binary: ${INSTALL_BIN_DIR:-/usr/local/bin}/$BIN_NAME${RESET}\n"

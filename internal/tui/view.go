@@ -10,8 +10,8 @@ import (
 
 	"github.com/alecthomas/chroma/v2"
 
-	"github.com/trebaud/sashi/internal/diff"
-	"github.com/trebaud/sashi/internal/git"
+	"github.com/trebaud/diffcat/internal/diff"
+	"github.com/trebaud/diffcat/internal/git"
 )
 
 // View renders the full screen: a header bar, the file list beside the diff
@@ -82,7 +82,7 @@ func (m model) render() string {
 }
 
 func (m model) headerView() string {
-	left := titleStyle.Render("sashi")
+	left := titleStyle.Render("diffcat")
 	if m.mode == viewLog {
 		mid := mutedStyle.Render(fmt.Sprintf("  %s · history", branchLabel(m.branch)))
 		count := "  " + headingStyle.Render(fmt.Sprintf("%d commits", len(m.commits)))
@@ -702,7 +702,7 @@ func (m model) footerView() string {
 
 func (m model) helpView() string {
 	lines := []string{
-		titleStyle.Render("sashi — vim keybindings"),
+		titleStyle.Render("diffcat — vim keybindings"),
 		"",
 		headingStyle.Render("  panes"),
 		"  h / l        focus file list / diff pane",

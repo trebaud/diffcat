@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-APP_NAME="sashi"
+APP_NAME="diffcat"
 BUILD_DIR="./dist"
 
 # Resolve version: explicit arg > current tag > git describe > "dev"
@@ -33,7 +33,7 @@ for PLATFORM in "${PLATFORMS[@]}"; do
         -trimpath \
         -ldflags "-s -w -X main.ldflagsVersion=${VERSION}" \
         -o "${STAGE}/${APP_NAME}" \
-        ./cmd/sashi
+        ./cmd/diffcat
 
     tar -czf "${BUILD_DIR}/${BASE}.tar.gz" -C "$BUILD_DIR" "$BASE"
     rm -rf "$STAGE"

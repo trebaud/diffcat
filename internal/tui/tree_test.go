@@ -3,7 +3,7 @@ package tui
 import (
 	"testing"
 
-	"github.com/trebaud/sashi/internal/git"
+	"github.com/trebaud/diffcat/internal/git"
 )
 
 func treeFiles() []git.FileChange {

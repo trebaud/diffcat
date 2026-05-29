@@ -4,7 +4,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/trebaud/sashi/internal/git"
+	"github.com/trebaud/diffcat/internal/git"
 )
 
 // treeRow is one rendered line of the file tree: either a directory (isDir) or a

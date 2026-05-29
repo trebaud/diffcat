@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# sashi deploy script
+# diffcat deploy script
 # Warms the Go module proxy for the current latest tag so
-# `go install github.com/trebaud/sashi/cmd/sashi@latest` picks it up.
+# `go install github.com/trebaud/diffcat/cmd/diffcat@latest` picks it up.
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -20,7 +20,7 @@ fail() { printf "${RED}[x]${RESET} %s\n" "$*"; exit 1; }
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-MODULE_PATH="$(go list -m 2>/dev/null || echo github.com/trebaud/sashi)"
+MODULE_PATH="$(go list -m 2>/dev/null || echo github.com/trebaud/diffcat)"
 
 [ -d .git ] || fail "Not a git repository."
 
@@ -46,6 +46,6 @@ fi
 echo ""
 printf "${GREEN}${BOLD}  Deployed ${TAG}${RESET}\n\n"
 printf "  Install with:\n"
-printf "    ${CYAN}go install ${MODULE_PATH}/cmd/sashi@latest${RESET}\n"
-printf "    ${CYAN}go install ${MODULE_PATH}/cmd/sashi@${TAG}${RESET}\n"
+printf "    ${CYAN}go install ${MODULE_PATH}/cmd/diffcat@latest${RESET}\n"
+printf "    ${CYAN}go install ${MODULE_PATH}/cmd/diffcat@${TAG}${RESET}\n"
 echo ""

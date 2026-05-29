@@ -3,8 +3,8 @@ package tui
 import (
 	"github.com/alecthomas/chroma/v2"
 
-	"github.com/trebaud/sashi/internal/diff"
-	"github.com/trebaud/sashi/internal/git"
+	"github.com/trebaud/diffcat/internal/diff"
+	"github.com/trebaud/diffcat/internal/git"
 )
 
 // log.go holds the commit-history view (viewLog): entering/leaving the mode,

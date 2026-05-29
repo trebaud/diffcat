@@ -1,4 +1,4 @@
-module github.com/trebaud/sashi
+module github.com/trebaud/diffcat
 
 go 1.26.1
 
