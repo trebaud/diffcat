@@ -33,6 +33,10 @@ auto-detected base branch.
     a minimum-size gate (`minWidth`/`minHeight` in `view.go`), and all chrome is
     width-clamped so nothing wraps. `render_smoke_test.go` guards the no-wrap
     invariant — every rendered line must be ≤ terminal width.
+  - `nyanBar` (view.go) pins a nyan-cat scroll-progress indicator to the bottom
+    of the diff pane: position = scroll fraction, rainbow trail behind. A
+    `tickMsg` loop (~7fps, `update.go`) wiggles the cat's face; it's the only
+    thing driving repaints, so there's no idle redraw beyond it.
 
 ## Stack
 

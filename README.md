@@ -30,6 +30,10 @@ current `HEAD`, so it shows what your branch introduced — not unrelated change
 that have since landed on the base. Staged, unstaged, and untracked files are
 all included.
 
+A nyan cat at the bottom of the diff pane tracks your scroll progress: it
+marches from the left edge (top of the file) to the right edge (end of the
+diff), trailing a rainbow as you read.
+
 ## Keys
 
 Navigation is vim-style. The file list (left) and diff (right) are separate

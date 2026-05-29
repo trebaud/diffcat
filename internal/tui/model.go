@@ -38,6 +38,8 @@ type model struct {
 	width  int
 	height int
 
+	animFrame int // drives the nyan cat's leg/face wiggle
+
 	showHelp bool
 	err      error
 }
@@ -55,7 +57,7 @@ func newModel(repo, base, baseName, branch string, files []git.FileChange, short
 	return m
 }
 
-func (m model) Init() tea.Cmd { return nil }
+func (m model) Init() tea.Cmd { return tickCmd() }
 
 // selectedFile returns the file under the cursor, or nil when the diff is empty.
 func (m model) selectedFile() *git.FileChange {

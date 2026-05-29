@@ -1,10 +1,22 @@
 package tui
 
 import (
+	"time"
+
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/trebaud/diff-master/internal/git"
 )
+
+// tickMsg drives the nyan cat's wiggle. ~7fps is enough for a charming gait
+// without busy-spinning the terminal.
+type tickMsg struct{}
+
+const tickInterval = 150 * time.Millisecond
+
+func tickCmd() tea.Cmd {
+	return tea.Tick(tickInterval, func(time.Time) tea.Msg { return tickMsg{} })
+}
 
 // Update is the Elm update function — it maps a message to the next model and
 // any side effects.
@@ -15,6 +27,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		m.clampDiffOffset()
 		return m, nil
+
+	case tickMsg:
+		m.animFrame++
+		return m, tickCmd()
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)

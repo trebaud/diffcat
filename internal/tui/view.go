@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"image/color"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -189,21 +190,84 @@ func (m model) diffView(width int) string {
 	if end > len(m.diffLines) {
 		end = len(m.diffLines)
 	}
+	shown := 0
 	for i := m.diffOffset; i < end; i++ {
 		b.WriteString(colorizeDiffLine(m.diffLines[i], width))
 		b.WriteString("\n")
+		shown++
+	}
+	// Pad to fill the pane so the nyan progress bar always pins to the bottom.
+	for ; shown < rows; shown++ {
+		b.WriteString("\n")
 	}
 
-	// Scroll indicator when there's more below.
-	if len(m.diffLines) > rows {
-		pct := 100
-		if max := len(m.diffLines) - rows; max > 0 {
-			pct = m.diffOffset * 100 / max
-		}
-		b.WriteString(mutedStyle.Render(fmt.Sprintf("  %d%%", pct)))
-	}
+	b.WriteString(m.nyanProgress(width))
 
 	return lipgloss.NewStyle().Width(width).MaxWidth(width).Render(b.String())
+}
+
+// nyanProgress renders the diff scroll position as a nyan cat marching from the
+// top of the file (left edge) to the end (right edge), trailing a rainbow. The
+// cat's face/legs wiggle on each tick; the diff content fully read is the
+// rainbow length behind it.
+func (m model) nyanProgress(width int) string {
+	rows := m.diffViewportHeight()
+	maxOff := len(m.diffLines) - rows
+	frac := 1.0 // whole diff fits on screen → already at the end
+	if maxOff > 0 {
+		frac = float64(m.diffOffset) / float64(maxOff)
+	}
+	return nyanBar(width, frac, m.animFrame)
+}
+
+func nyanBar(width int, frac float64, frame int) string {
+	if width < 8 {
+		return strings.Repeat(" ", max(0, width))
+	}
+	switch {
+	case frac < 0:
+		frac = 0
+	case frac > 1:
+		frac = 1
+	}
+
+	// 2-frame gait. The cat is the pink pop-tart nyan.
+	cat := "=^.^="
+	if frame%2 == 1 {
+		cat = "=^-^="
+	}
+	catW := lipgloss.Width(cat)
+
+	maxX := width - catW
+	if maxX < 1 {
+		maxX = 1
+	}
+	catX := int(frac*float64(maxX) + 0.5)
+
+	// ANSI rainbow: red, yellow, green, cyan, blue, magenta.
+	trail := []color.Color{
+		lipgloss.Color("1"), lipgloss.Color("3"), lipgloss.Color("2"),
+		lipgloss.Color("6"), lipgloss.Color("4"), lipgloss.Color("5"),
+	}
+	n := len(trail)
+
+	var b strings.Builder
+	// Rainbow trail behind the cat, in 2-char blocks that shimmer per frame.
+	for blk := 0; blk*2 < catX; blk++ {
+		start := blk * 2
+		segEnd := start + 2
+		if segEnd > catX {
+			segEnd = catX
+		}
+		s := lipgloss.NewStyle().Foreground(trail[(blk+frame)%n])
+		b.WriteString(s.Render(strings.Repeat("━", segEnd-start)))
+	}
+	b.WriteString(selectedStyle.Render(cat)) // accent-pink cat
+	// Faint track ahead of the cat shows how far is left.
+	if right := width - catX - catW; right > 0 {
+		b.WriteString(borderStyle.Render(strings.Repeat("─", right)))
+	}
+	return b.String()
 }
 
 // colorizeDiffLine styles a single unified-diff line by its leading marker.
