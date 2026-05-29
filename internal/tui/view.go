@@ -16,6 +16,10 @@ import (
 func (m model) View() tea.View {
 	v := tea.NewView(m.render())
 	v.AltScreen = true
+	// Drive the terminal canvas from the theme so a light theme actually turns
+	// the whole screen light (nil in dark mode = keep the terminal's own colors).
+	v.BackgroundColor = colCanvas
+	v.ForegroundColor = colText
 	return v
 }
 
@@ -541,7 +545,7 @@ func (m model) paneHeading(text string, pane focusPane) string {
 
 func (m model) footerView() string {
 	keys := []string{
-		"j/k move", "h/l ⇄ pane", "↵ open/fold", "gg/G top/bot", "C-d/C-u half", "s split", "r refresh", "? help", "q quit",
+		"j/k move", "h/l ⇄ pane", "↵ open/fold", "gg/G top/bot", "C-d/C-u half", "s split", "t theme", "r refresh", "? help", "q quit",
 	}
 	return mutedStyle.Render(strings.Join(keys, "  ·  "))
 }
@@ -563,6 +567,7 @@ func (m model) helpView() string {
 		"",
 		headingStyle.Render("  view"),
 		"  s            toggle unified / side-by-side",
+		"  t            toggle light / dark theme",
 		"  r            refresh from disk",
 		"  ? / q        toggle help / quit",
 		"",

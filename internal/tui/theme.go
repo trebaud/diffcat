@@ -20,6 +20,15 @@ var (
 	colMuted  color.Color = lipgloss.ANSIColor(8)
 	colRowBg  color.Color = lipgloss.Color("239")
 	colBorder color.Color = lipgloss.ANSIColor(8)
+
+	// Whole-screen canvas. These drive tea.View's terminal background/foreground
+	// so the entire UI — not just the diff's add/del tints — flips with the theme.
+	// nil means "leave the terminal's own colors": in dark mode we respect the
+	// user's terminal (the long-standing default), but the light theme paints an
+	// explicit near-white canvas with dark text, otherwise the dark github syntax
+	// colors would have no light background to read against.
+	colCanvas color.Color
+	colText   color.Color
 )
 
 var (
@@ -61,6 +70,14 @@ func ApplyTheme(isDark bool) {
 
 	colRowBg = ld(lipgloss.Color("254"), lipgloss.Color("239"))
 	colBorder = ld(lipgloss.Color("250"), lipgloss.Color("238"))
+
+	// Light mode paints an explicit canvas (GitHub's page bg + ink); dark mode
+	// keeps nil so the user's terminal background shows through, as before.
+	if isDark {
+		colCanvas, colText = nil, nil
+	} else {
+		colCanvas, colText = lipgloss.Color("#ffffff"), lipgloss.Color("#1f2328")
+	}
 
 	titleStyle = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 	mutedStyle = lipgloss.NewStyle().Foreground(colMuted)
@@ -107,9 +124,12 @@ func ApplyTheme(isDark bool) {
 }
 
 // DetectAndApplyTheme inspects the terminal background once and applies the
-// matching theme. Falls back to dark on any detection error.
-func DetectAndApplyTheme() {
-	ApplyTheme(lipgloss.HasDarkBackground(os.Stdin, os.Stdout))
+// matching theme, returning whether the dark theme was chosen. Falls back to
+// dark on any detection error.
+func DetectAndApplyTheme() bool {
+	dark := lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
+	ApplyTheme(dark)
+	return dark
 }
 
 // statusGlyph maps a git status letter to a single-character badge.

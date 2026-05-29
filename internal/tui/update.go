@@ -77,6 +77,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.diffOffset = 0
 		return m, nil
 
+	case "t":
+		m.toggleTheme()
+		return m, nil
+
 	// --- pane focus (vim window motions) ---
 	case "tab":
 		m.toggleFocus()
@@ -126,6 +130,16 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// toggleTheme flips between the dark and light palettes, rebuilding the global
+// style table. The highlight cache memoizes token colors from the active Chroma
+// style, so it's dropped here to re-lex under the new style (scroll position is
+// preserved — only the colors change).
+func (m *model) toggleTheme() {
+	m.dark = !m.dark
+	ApplyTheme(m.dark)
+	m.hlCache = map[string][]span{}
 }
 
 func (m *model) toggleFocus() {

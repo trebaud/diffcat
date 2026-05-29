@@ -36,9 +36,9 @@ func Run(dir, baseName string) error {
 	branch := git.CurrentBranch(repo)
 	shortstat := git.Shortstat(repo, base)
 
-	DetectAndApplyTheme()
+	dark := DetectAndApplyTheme()
 
-	p := tea.NewProgram(newModel(repo, base, baseName, branch, files, shortstat))
+	p := tea.NewProgram(newModel(repo, base, baseName, branch, files, shortstat, dark))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
 		os.Exit(1)

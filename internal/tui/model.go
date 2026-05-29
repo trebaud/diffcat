@@ -59,13 +59,15 @@ type model struct {
 	width  int
 	height int
 
+	dark bool // current theme; toggled with `t`, seeds the style table on rebuild
+
 	animFrame int // drives the nyan cat's leg/face wiggle
 
 	showHelp bool
 	err      error
 }
 
-func newModel(repo, base, baseName, branch string, files []git.FileChange, shortstat string) model {
+func newModel(repo, base, baseName, branch string, files []git.FileChange, shortstat string, dark bool) model {
 	m := model{
 		repo:      repo,
 		base:      base,
@@ -74,6 +76,7 @@ func newModel(repo, base, baseName, branch string, files []git.FileChange, short
 		shortstat: shortstat,
 		files:     files,
 		collapsed: map[string]bool{},
+		dark:      dark,
 	}
 	m.rebuildTree()
 	m.loadDiff()
