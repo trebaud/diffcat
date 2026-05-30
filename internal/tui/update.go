@@ -91,8 +91,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "esc":
-		// Esc steps back one level: a per-commit tree → the history list →
-		// the default branch diff; on the default view it quits.
+		// Esc steps back one level: a per-commit (or working-tree) drill-in → the
+		// history list → the default branch diff; on the default view it quits.
 		switch m.mode {
 		case viewCommit:
 			m.exitCommit()
@@ -150,10 +150,15 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.focus = focusDiff
 		return m, nil
 	case "enter", "o":
-		// History list: enter drills into the highlighted commit's file tree.
-		// (Scroll its preview instead with l/Tab to focus the diff pane.)
+		// History list: enter drills into the highlighted commit's file tree, or
+		// the working-tree row into the full branch view. (Scroll its preview
+		// instead with l/Tab to focus the diff pane.)
 		if m.mode == viewLog {
-			m.enterCommit()
+			if m.onWorkingRow() {
+				m.enterWorkingTree()
+			} else {
+				m.enterCommit()
+			}
 			return m, nil
 		}
 		// In the diff pane, on an expand affordance: reveal hidden context.
@@ -266,7 +271,7 @@ func (m *model) gotoBottom() {
 		m.diffCursor = m.totalDiffRows() - 1
 		m.ensureCursorVisible()
 	case m.mode == viewLog:
-		m.commitCursor = max(0, len(m.commits)-1)
+		m.commitCursor = max(0, m.logRowCount()-1)
 		m.loadCommitDiff()
 	default:
 		m.cursor = max(0, len(m.rows)-1)
@@ -323,9 +328,25 @@ func (m *model) refresh() {
 	m.shortstat = git.Shortstat(m.repo, m.base)
 
 	if m.mode == viewCommit {
-		// The drilled-in tree is one immutable commit's file set, so it (and the
-		// stashed branch tree) are left untouched; just reload the visible file's
-		// diff, holding scroll. The branch tree re-syncs once you exit back to it.
+		if m.scopeWorking {
+			// The working-tree drill-in is mutable (edits/staging change its file
+			// set), so rebuild it from `git diff HEAD`, holding the selected file
+			// and scroll where possible. The stashed branch tree re-syncs on exit.
+			prevPath := ""
+			if f := m.selectedFile(); f != nil {
+				prevPath = f.Path
+			}
+			if files, err := git.ChangedFiles(m.repo, "HEAD"); err == nil {
+				m.files = files
+				m.rebuildTree()
+				m.reselectPath(prevPath)
+			}
+			m.preserveDiffView(m.loadDiff)
+			return
+		}
+		// A real commit's file set is immutable, so it (and the stashed branch
+		// tree) are left untouched; just reload the visible file's diff, holding
+		// scroll. The branch tree re-syncs once you exit back to it.
 		m.preserveDiffView(m.loadDiff)
 		return
 	}
@@ -341,12 +362,20 @@ func (m *model) refresh() {
 	}
 
 	if m.mode == viewLog {
+		wasWorking := m.onWorkingRow()
 		prevSHA := ""
 		if c := m.selectedCommit(); c != nil {
 			prevSHA = c.SHA
 		}
 		m.loadCommits()
-		m.reselectCommit(prevSHA)
+		m.logWorking = len(m.files) > 0
+		// Keep the reader on the working-tree row across a sync when it's still
+		// present; otherwise re-find the same commit by SHA.
+		if wasWorking && m.logWorking {
+			m.commitCursor = 0
+		} else {
+			m.reselectCommit(prevSHA)
+		}
 		m.preserveDiffView(m.loadCommitDiff)
 		return
 	}
@@ -377,6 +406,9 @@ func (m *model) reselectCommit(sha string) {
 		for i, c := range m.commits {
 			if c.SHA == sha {
 				m.commitCursor = i
+				if m.logWorking {
+					m.commitCursor++ // account for the leading working-tree row
+				}
 				return
 			}
 		}
@@ -421,8 +453,8 @@ func diffLinesEqual(a, b []diff.Line) bool {
 // clampCommitCursor keeps the history cursor within the (possibly reloaded)
 // commit list.
 func (m *model) clampCommitCursor() {
-	if m.commitCursor >= len(m.commits) {
-		m.commitCursor = max(0, len(m.commits)-1)
+	if m.commitCursor >= m.logRowCount() {
+		m.commitCursor = max(0, m.logRowCount()-1)
 	}
 	if m.commitCursor < 0 {
 		m.commitCursor = 0

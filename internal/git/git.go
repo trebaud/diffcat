@@ -471,6 +471,22 @@ func FileDiff(repo, base, path string, status string) string {
 	return string(out)
 }
 
+// WorkingDiff returns the combined diff of the working tree against HEAD — every
+// uncommitted change, staged and unstaged, as one multi-file patch ready for
+// diff.Parse. It backs the history view's "working tree" entry, which sits above
+// HEAD as the not-yet-committed delta, so it must diff against HEAD, not the
+// branch base: diffing against base would fold in the committed changes the
+// individual commit rows already account for. Untracked files have no diff in
+// the index so they're omitted from this combined view; the per-file drill-in
+// still shows them via FileDiff's --no-index path.
+func WorkingDiff(repo string) string {
+	out, err := exec.Command("git", "-C", repo, "diff", "--no-color", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
 // Shortstat returns a one-line summary of the whole diff against base, e.g.
 // "5 files changed, 120 insertions(+), 30 deletions(-)". Empty when clean.
 func Shortstat(repo, base string) string {

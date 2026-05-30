@@ -89,6 +89,10 @@ func (m model) headerView() string {
 		return left + mid + count
 	}
 	if m.mode == viewCommit {
+		if m.scopeWorking {
+			mid := mutedStyle.Render("  history · working tree")
+			return left + mid + "  " + headingStyle.Render("uncommitted changes")
+		}
 		c := m.scopeCommit
 		sha, subject := "", ""
 		if c != nil {
@@ -101,7 +105,13 @@ func (m model) headerView() string {
 	if base == "" {
 		base = "base"
 	}
-	mid := mutedStyle.Render(fmt.Sprintf("  %s ← %s", branchLabel(m.branch), base))
+	mid := mutedStyle.Render(fmt.Sprintf("  %s ← ", branchLabel(m.branch)))
+	mid += headingStyle.Render(base)
+	// Spell out that the base is the repo's default branch so it's obvious the
+	// diff is against master/main, not some arbitrary ref.
+	if m.baseIsDefault {
+		mid += mutedStyle.Render(" (default branch)")
+	}
 	stat := ""
 	if m.shortstat != "" {
 		stat = "  " + headingStyle.Render(m.shortstat)
@@ -151,6 +161,9 @@ func (m model) listView(width int) string {
 		msg := "  no changes against base"
 		if m.mode == viewCommit {
 			msg = "  no files in this commit"
+			if m.scopeWorking {
+				msg = "  no uncommitted changes"
+			}
 		}
 		b.WriteString(mutedStyle.Render(msg))
 		return lipgloss.NewStyle().Width(width).Render(b.String())
@@ -179,28 +192,67 @@ func (m model) commitListView(width int) string {
 	rows := m.listViewportHeight()
 	var b strings.Builder
 
-	b.WriteString(m.paneHeading(fmt.Sprintf("Commits (%d)", len(m.commits)), focusFiles))
+	b.WriteString(m.paneHeading(fmt.Sprintf("History (%d)", len(m.commits)), focusFiles))
 	b.WriteString("\n")
 
-	if len(m.commits) == 0 {
+	total := m.logRowCount()
+	if total == 0 {
 		b.WriteString(mutedStyle.Render("  no commits on this branch"))
 		return lipgloss.NewStyle().Width(width).Render(b.String())
 	}
 
-	// Scroll the list to keep the cursor visible (mirrors listView).
+	// Scroll the list to keep the cursor visible (mirrors listView). The cursor
+	// and offset index the displayed list, which includes the optional leading
+	// working-tree row.
 	offset := 0
 	if m.commitCursor >= rows {
 		offset = m.commitCursor - rows + 1
 	}
 	end := offset + rows
-	if end > len(m.commits) {
-		end = len(m.commits)
+	if end > total {
+		end = total
 	}
 	for i := offset; i < end; i++ {
-		b.WriteString(m.commitRow(m.commits[i], i == m.commitCursor, width))
+		sel := i == m.commitCursor
+		if m.logWorking && i == 0 {
+			b.WriteString(m.workingRow(sel, width))
+		} else {
+			ci := i
+			if m.logWorking {
+				ci--
+			}
+			b.WriteString(m.commitRow(m.commits[ci], sel, width))
+		}
 		b.WriteString("\n")
 	}
 	return lipgloss.NewStyle().Width(width).Render(b.String())
+}
+
+// workingRow renders the synthetic "working tree" entry pinned atop the history
+// list: a hollow node glyph, a "local" tag in the SHA column, and a summary of
+// the uncommitted changes. It mirrors commitRow's layout so the two read as one
+// list, with a green glyph to flag it as the live working state.
+func (m model) workingRow(selected bool, width int) string {
+	glyph := "○"
+	n := len(m.files)
+	noun := "files"
+	if n == 1 {
+		noun = "file"
+	}
+	tag := "local"
+	subj := fmt.Sprintf("uncommitted changes · %d %s", n, noun)
+
+	head := glyph + " " + tag + " "
+	avail := width - lipgloss.Width(head)
+	if avail < 3 {
+		avail = 3
+	}
+	subj = truncateText(subj, avail)
+
+	if selected {
+		return selectedRowStyle.Width(width).Render(head + subj)
+	}
+	return addedStyle.Render(glyph) + " " + metaStyle.Render(tag) + " " + subj
 }
 
 // commitRow renders one commit line: a node glyph (● commit, ◆ merge), the short
@@ -363,6 +415,10 @@ func (m model) diffView(width int) string {
 // commit's combined diff, headed by its short SHA and subject.
 func (m model) commitDiffView(width int) string {
 	rows := m.diffViewportHeight()
+	if m.onWorkingRow() {
+		title := truncateText("working tree · uncommitted changes", width-2-lipgloss.Width(m.splitTag())) + m.splitTag()
+		return m.diffPane(width, title, m.diffWindow(width, rows))
+	}
 	c := m.selectedCommit()
 	if c == nil {
 		return m.diffPane(width, "commit", []string{mutedStyle.Render("  No commit selected.")})
@@ -686,7 +742,7 @@ func (m model) footerView() string {
 	switch m.mode {
 	case viewLog:
 		keys = []string{
-			"j/k commit", "h/l ⇄ pane", "↵ open commit", "gg/G top/bot", "s split", "t theme", "L/esc back", "? help", "q quit",
+			"j/k select", "h/l ⇄ pane", "↵ open", "gg/G top/bot", "s split", "t theme", "L/esc back", "? help", "q quit",
 		}
 	case viewCommit:
 		keys = []string{
@@ -720,8 +776,9 @@ func (m model) helpView() string {
 		"",
 		headingStyle.Render("  history"),
 		"  L            toggle the commit-history view",
-		"  j / k        (in history) move between commits, preview each diff",
-		"  Enter        (in history) open the commit's file tree",
+		"  j / k        (in history) move between entries, preview each diff",
+		"  Enter        (in history) open the commit's (or working tree's) files",
+		"  ○ local      (in history) the working tree: staged + unstaged changes",
 		"  Esc          step back: commit tree → history → branch diff",
 		"",
 		headingStyle.Render("  view"),
