@@ -359,6 +359,7 @@ func (m *model) refresh() {
 		m.files = files
 		m.rebuildTree()
 		m.reselectPath(prevPath)
+		m.flagChangedFiles()
 	}
 
 	if m.mode == viewLog {

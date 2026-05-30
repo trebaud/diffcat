@@ -343,6 +343,13 @@ func (m model) treeRow(r treeRow, selected bool, width int) string {
 		nameStyled = dirStyle.Render(name)
 		glyphStyled = dirStyle.Render(glyph)
 	}
+	// A file a sync changed (and the reader hasn't opened) pulses: on the bright
+	// half of the cycle its glyph + name flip to the attention tone. Driven by the
+	// same animFrame as the nyan cat, so the existing tick already repaints it.
+	if !r.isDir && m.unseen[r.path] && unseenPulseOn(m.animFrame) {
+		glyphStyled = changedPulseStyle.Render(glyph)
+		nameStyled = changedPulseStyle.Render(name)
+	}
 
 	stats := mutedStyle.Render(statsPlain)
 	if !r.isDir && !r.binary && statsPlain != "" {
@@ -379,6 +386,14 @@ func treeGuidesPlain(guides []bool) string {
 		}
 	}
 	return b.String()
+}
+
+// unseenPulseOn reports the bright half of the attention pulse for a file the
+// reader hasn't opened since a sync changed it. The cycle rides animFrame (~7fps,
+// the nyan tick); ~3 frames per half gives a calm ~0.9s blink rather than a
+// strobe.
+func unseenPulseOn(frame int) bool {
+	return (frame/3)%2 == 0
 }
 
 // truncatePath keeps the filename visible by trimming the left (directory) side.

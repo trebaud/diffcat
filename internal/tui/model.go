@@ -116,6 +116,15 @@ type model struct {
 
 	animFrame int // drives the nyan cat's leg/face wiggle
 
+	// A background sync that changes the working tree flags the affected files so
+	// their tree rows pulse until the reader opens them. fileSig is each path's
+	// last-seen change signature (status + line counts); when a sync changes or
+	// adds a signature the path is marked unseen, and opening its diff (loadDiff)
+	// clears it. Seeded at construction from the initial change set, so only drift
+	// since launch is flagged — not the files already on screen.
+	fileSig map[string]string
+	unseen  map[string]bool
+
 	// syncFingerprint is the git state as of the last background poll (see
 	// git.Fingerprint). The poll recomputes it off the UI thread; when it differs
 	// the view is auto-refreshed. Seeded at construction so the first poll doesn't
@@ -139,6 +148,8 @@ func newModel(repo, base, baseName string, baseIsDefault bool, branch string, fi
 		commitDiffCache: map[string][]diff.Line{},
 		dark:            dark,
 		syncFingerprint: git.Fingerprint(repo, baseName),
+		fileSig:         fileSignatures(files),
+		unseen:          map[string]bool{},
 	}
 	m.rebuildTree()
 	m.loadDiff()
@@ -149,6 +160,54 @@ func newModel(repo, base, baseName string, baseIsDefault bool, branch string, fi
 		m.enterLog()
 	}
 	return m
+}
+
+// fileSig is a cheap per-file change signature — the status letter plus its
+// add/delete counts — used to tell whether a sync altered a file. It rides the
+// counts ChangedFiles already computes, so detecting drift costs nothing extra.
+func fileSig(f git.FileChange) string {
+	return f.Status + ":" + strconv.Itoa(f.Added) + ":" + strconv.Itoa(f.Deleted)
+}
+
+// fileSignatures snapshots the signature of every changed file by path.
+func fileSignatures(files []git.FileChange) map[string]string {
+	sig := make(map[string]string, len(files))
+	for _, f := range files {
+		sig[f.Path] = fileSig(f)
+	}
+	return sig
+}
+
+// flagChangedFiles compares the freshly reloaded file list against the previous
+// poll's signatures and marks every path whose change appeared or grew as unseen,
+// so its tree row pulses until the reader opens it. The file currently under the
+// cursor is treated as already seen — its diff is on screen — and flags for paths
+// that are no longer changed at all are dropped.
+func (m *model) flagChangedFiles() {
+	if m.unseen == nil {
+		m.unseen = map[string]bool{}
+	}
+	selPath := ""
+	if f := m.selectedFile(); f != nil {
+		selPath = f.Path
+	}
+	next := make(map[string]string, len(m.files))
+	for _, f := range m.files {
+		sig := fileSig(f)
+		next[f.Path] = sig
+		if f.Path == selPath {
+			continue
+		}
+		if prev, ok := m.fileSig[f.Path]; !ok || prev != sig {
+			m.unseen[f.Path] = true
+		}
+	}
+	for p := range m.unseen {
+		if _, ok := next[p]; !ok {
+			delete(m.unseen, p)
+		}
+	}
+	m.fileSig = next
 }
 
 // rebuildTree regenerates the flattened tree rows from the current file list,
@@ -220,6 +279,8 @@ func (m *model) loadDiff() {
 	if f == nil {
 		return
 	}
+	// Opening a file's diff counts as seeing it: stop its tree row from pulsing.
+	delete(m.unseen, f.Path)
 	m.lexer = lexerFor(f.Path)
 	var raw string
 	switch {
