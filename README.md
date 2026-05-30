@@ -1,10 +1,19 @@
-# diffcat
+<div align="center">
+
+# 🐱 diffcat
+
+**`cat`, but for git diffs.**
 
 [![Go](https://img.shields.io/badge/go-1.21%2B-00ADD8?logo=go)](https://go.dev)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 [![Release](https://img.shields.io/github/v/release/trebaud/diffcat)](https://github.com/trebaud/diffcat/releases)
 
-`cat`, but for git diffs.
+<!-- TODO: record a demo. Drop a ~10s asciinema/GIF showing: launch → browse tree →
+     toggle split (s) → open commit history (L). Save to docs/demo.gif and uncomment:
+![diffcat demo](docs/demo.gif)
+-->
+
+</div>
 
 ## Features
 
