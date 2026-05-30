@@ -105,6 +105,12 @@ type model struct {
 
 	animFrame int // drives the nyan cat's leg/face wiggle
 
+	// syncFingerprint is the git state as of the last background poll (see
+	// git.Fingerprint). The poll recomputes it off the UI thread; when it differs
+	// the view is auto-refreshed. Seeded at construction so the first poll doesn't
+	// fire a spurious refresh.
+	syncFingerprint string
+
 	showHelp bool
 	err      error
 }
@@ -120,6 +126,7 @@ func newModel(repo, base, baseName, branch string, files []git.FileChange, short
 		collapsed:       map[string]bool{},
 		commitDiffCache: map[string][]diff.Line{},
 		dark:            dark,
+		syncFingerprint: git.Fingerprint(repo, baseName),
 	}
 	m.rebuildTree()
 	m.loadDiff()
@@ -167,7 +174,7 @@ func (m *model) toggleCollapse() {
 	m.rebuildTree()
 }
 
-func (m model) Init() tea.Cmd { return tickCmd() }
+func (m model) Init() tea.Cmd { return tea.Batch(tickCmd(), syncCmd(m.repo, m.baseName)) }
 
 // selectedFile returns the file under the cursor, or nil when the cursor is on a
 // folder row (or the tree is empty) — those have no diff to show.

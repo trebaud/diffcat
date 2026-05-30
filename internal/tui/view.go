@@ -727,7 +727,7 @@ func (m model) helpView() string {
 		headingStyle.Render("  view"),
 		"  s            toggle unified / side-by-side",
 		"  t            toggle light / dark theme",
-		"  r            refresh from disk",
+		"  r            refresh from disk (also auto-syncs in the background)",
 		"  ? / q        toggle help / quit",
 		"",
 		mutedStyle.Render("  press any key to dismiss"),

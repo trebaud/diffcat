@@ -4,6 +4,7 @@
 package git
 
 import (
+	"crypto/sha1"
 	"fmt"
 	"os"
 	"os/exec"
@@ -213,6 +214,51 @@ type FileChange struct {
 
 // Binary reports whether git could not compute line stats for the change.
 func (f FileChange) Binary() bool { return f.Added < 0 || f.Deleted < 0 }
+
+// Fingerprint returns a cheap hash of the repository state diffcat renders, for
+// polling in the background to tell whether the on-screen view has drifted from
+// the working tree. It folds together HEAD and the base tip (so commits,
+// checkouts, rebases, and the base branch advancing all move it), the porcelain
+// status (the set of changed paths and their staged/unstaged state), and each
+// changed path's size+mtime (so an in-place edit to an already-modified file —
+// which leaves the status letters unchanged — still moves it). It deliberately
+// avoids recomputing the diff: a couple of git calls plus a handful of lstats,
+// far cheaper than ChangedFiles. An unchanged fingerprint means nothing diffcat
+// cares about has changed, so a poll can skip the refresh entirely.
+func Fingerprint(repo, baseName string) string {
+	h := sha1.New()
+	for _, ref := range []string{"HEAD", baseName} {
+		out, _ := exec.Command("git", "-C", repo, "rev-parse", "--verify", "--quiet", ref).Output()
+		h.Write(out)
+	}
+	statusOut, _ := exec.Command("git", "-C", repo, "status", "--porcelain", "--untracked-files=all").Output()
+	h.Write(statusOut)
+	for _, p := range statusPaths(statusOut) {
+		if fi, err := os.Stat(filepath.Join(repo, p)); err == nil {
+			fmt.Fprintf(h, "\x00%s\x00%d\x00%d", p, fi.Size(), fi.ModTime().UnixNano())
+		}
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// statusPaths extracts the changed paths from `git status --porcelain` output.
+// Each line is "XY <path>" (columns 0-1 are the staged/unstaged codes, the path
+// starts at column 3); a rename is "XY <orig> -> <new>", from which we take the
+// new path. Pure, so it can be tested without a repo.
+func statusPaths(porcelain []byte) []string {
+	var paths []string
+	for _, line := range strings.Split(string(porcelain), "\n") {
+		if len(line) < 4 {
+			continue
+		}
+		p := line[3:]
+		if i := strings.Index(p, " -> "); i >= 0 {
+			p = p[i+len(" -> "):]
+		}
+		paths = append(paths, strings.Trim(p, "\""))
+	}
+	return paths
+}
 
 // ChangedFiles lists every path that differs between base and the working tree,
 // including staged, unstaged, and (optionally) untracked files. It merges

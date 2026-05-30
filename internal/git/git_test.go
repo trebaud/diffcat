@@ -86,3 +86,22 @@ func TestParseCommitsEmpty(t *testing.T) {
 		t.Errorf("blank input: got %d commits, want 0", len(got))
 	}
 }
+
+func TestStatusPaths(t *testing.T) {
+	porcelain := " M internal/git/git.go\n" + // unstaged modification
+		"A  cmd/diffcat/new.go\n" + // staged add
+		"?? notes.txt\n" + // untracked
+		"R  old/path.go -> new/path.go\n" + // rename: new path wins
+		"\n" // trailing blank line is ignored
+
+	got := statusPaths([]byte(porcelain))
+	want := []string{"internal/git/git.go", "cmd/diffcat/new.go", "notes.txt", "new/path.go"}
+	if len(got) != len(want) {
+		t.Fatalf("got %d paths %v, want %d %v", len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("path[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
