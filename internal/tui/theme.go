@@ -39,8 +39,9 @@ var (
 	selectedRowStyle lipgloss.Style
 	borderStyle      lipgloss.Style
 
-	dirStyle       lipgloss.Style // folder rows in the file tree
-	treeGuideStyle lipgloss.Style // the faint │ rails connecting tree levels
+	dirStyle          lipgloss.Style // folder rows in the file tree
+	treeGuideStyle    lipgloss.Style // the faint │ rails connecting tree levels
+	changedPulseStyle lipgloss.Style // pulsing highlight for files a sync just changed
 
 	branchStyle    lipgloss.Style // the current branch name in the header
 	baseBadgeStyle lipgloss.Style // the base branch, as a colored pill in the header
@@ -97,6 +98,10 @@ func ApplyTheme(isDark bool) {
 	// accent); the tree rails are as faint as the pane divider.
 	dirStyle = lipgloss.NewStyle().Foreground(colMeta).Bold(true)
 	treeGuideStyle = lipgloss.NewStyle().Foreground(colBorder)
+	// Files touched by a background sync but not yet opened pulse in the warn tone
+	// (distinct from the magenta selection accent and the add/del greens/reds) to
+	// draw the eye without being mistaken for the cursor.
+	changedPulseStyle = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
 
 	addedStyle = lipgloss.NewStyle().Foreground(colAdded)
 	removedStyle = lipgloss.NewStyle().Foreground(colRemoved)
