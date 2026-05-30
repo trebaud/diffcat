@@ -42,6 +42,9 @@ var (
 	dirStyle       lipgloss.Style // folder rows in the file tree
 	treeGuideStyle lipgloss.Style // the faint │ rails connecting tree levels
 
+	branchStyle    lipgloss.Style // the current branch name in the header
+	baseBadgeStyle lipgloss.Style // the base branch, as a colored pill in the header
+
 	addedStyle   lipgloss.Style
 	removedStyle lipgloss.Style
 	metaStyle    lipgloss.Style
@@ -112,6 +115,13 @@ func ApplyTheme(isDark bool) {
 	fillBg := ld(lipgloss.Color("#f6f8fa"), lipgloss.Color("#0d1117"))
 
 	diffAddBg, diffDelBg = addBg, delBg
+
+	// Header: the current branch reads bright (inherits the terminal fg, just
+	// bold), while the base branch is a blue "info" pill — the same GitHub blue
+	// as hunk headers — so it's obvious at a glance what the diff is measured
+	// against. The pill degrades to a visible block in 16-color terminals.
+	branchStyle = lipgloss.NewStyle().Bold(true)
+	baseBadgeStyle = lipgloss.NewStyle().Background(hunkBg).Foreground(hunkFg).Bold(true)
 
 	addNumStyle = lipgloss.NewStyle().Background(addBg).Foreground(addFg)
 	delNumStyle = lipgloss.NewStyle().Background(delBg).Foreground(delFg)
