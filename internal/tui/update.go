@@ -19,6 +19,22 @@ func tickCmd() tea.Cmd {
 	return tea.Tick(tickInterval, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
+// gitStateMsg carries the result of a background git-state poll. The fingerprint
+// is computed in the tick goroutine (off the UI thread), so the poll never
+// blocks rendering even on a slow repo.
+type gitStateMsg struct{ fingerprint string }
+
+// syncInterval is how long the poll waits between fingerprint checks. It
+// self-paces: the next poll is scheduled only after the previous one returns
+// (Update re-arms it), so a slow `git status` can't pile up overlapping polls.
+const syncInterval = 1500 * time.Millisecond
+
+func syncCmd(repo, baseName string) tea.Cmd {
+	return tea.Tick(syncInterval, func(time.Time) tea.Msg {
+		return gitStateMsg{fingerprint: git.Fingerprint(repo, baseName)}
+	})
+}
+
 // Update is the Elm update function — it maps a message to the next model and
 // any side effects.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -34,6 +50,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m.animFrame++
 		return m, tickCmd()
+
+	case gitStateMsg:
+		// Only do the (more expensive) refresh when the cheap fingerprint moved;
+		// otherwise the poll is a no-op beyond re-arming itself.
+		if msg.fingerprint != m.syncFingerprint {
+			m.syncFingerprint = msg.fingerprint
+			m.refresh()
+		}
+		return m, syncCmd(m.repo, m.baseName)
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -97,6 +122,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "r":
 		m.refresh()
+		m.syncFingerprint = git.Fingerprint(m.repo, m.baseName)
 		return m, nil
 
 	case "s":
@@ -286,29 +312,110 @@ func (m *model) moveCursor(delta int) {
 	m.loadDiff()
 }
 
-// refresh recomputes the base and reloads the changed-file list from disk so
-// the view reflects edits made since launch.
+// refresh recomputes the base and reloads the changed-file list from disk so the
+// view reflects edits made since launch. It is driven both by the manual `r` key
+// and by the background sync poll, so it preserves the reader's position: the
+// same file stays selected by path (the same commit by SHA in history), and diff
+// scroll/cursor/expansion are kept when the visible content didn't actually
+// change — only genuinely new content resets the view.
 func (m *model) refresh() {
 	m.base = git.BaseRef(m.repo, m.baseName)
+	m.shortstat = git.Shortstat(m.repo, m.base)
+
+	if m.mode == viewCommit {
+		// The drilled-in tree is one immutable commit's file set, so it (and the
+		// stashed branch tree) are left untouched; just reload the visible file's
+		// diff, holding scroll. The branch tree re-syncs once you exit back to it.
+		m.preserveDiffView(m.loadDiff)
+		return
+	}
+
+	prevPath := ""
+	if f := m.selectedFile(); f != nil {
+		prevPath = f.Path
+	}
 	if files, err := git.ChangedFiles(m.repo, m.base); err == nil {
 		m.files = files
 		m.rebuildTree()
+		m.reselectPath(prevPath)
 	}
-	m.shortstat = git.Shortstat(m.repo, m.base)
-	switch m.mode {
-	case viewLog:
+
+	if m.mode == viewLog {
+		prevSHA := ""
+		if c := m.selectedCommit(); c != nil {
+			prevSHA = c.SHA
+		}
 		m.loadCommits()
-		m.clampCommitCursor()
-		m.loadCommitDiff()
-		return
-	case viewCommit:
-		// A commit is immutable, so its file set can't have changed; just reload
-		// the current file's diff. The stashed branch tree is refreshed on the
-		// next refresh after exiting back to it.
-		m.loadDiff()
+		m.reselectCommit(prevSHA)
+		m.preserveDiffView(m.loadCommitDiff)
 		return
 	}
-	m.loadDiff()
+	m.preserveDiffView(m.loadDiff)
+}
+
+// reselectPath moves the tree cursor back onto the row for path after a rebuild,
+// so a sync keeps the same file selected even when the change list reordered or
+// grew. Falls back to the (already clamped) cursor when the path is gone — e.g.
+// its changes were reverted.
+func (m *model) reselectPath(path string) {
+	if path == "" {
+		return
+	}
+	for i, r := range m.rows {
+		if r.file != nil && r.file.Path == path {
+			m.cursor = i
+			return
+		}
+	}
+}
+
+// reselectCommit moves the history cursor back onto the commit with sha after the
+// list reloads, so a sync that added newer commits on top doesn't shift the
+// reader onto a different commit. Falls back to the clamped cursor if it's gone.
+func (m *model) reselectCommit(sha string) {
+	if sha != "" {
+		for i, c := range m.commits {
+			if c.SHA == sha {
+				m.commitCursor = i
+				return
+			}
+		}
+	}
+	m.clampCommitCursor()
+}
+
+// preserveDiffView runs reload (loadDiff or loadCommitDiff) and, when the diff it
+// produces is byte-for-byte identical to what was on screen, restores the prior
+// scroll, cursor, and expansion state — so a background sync that didn't touch
+// the visible file leaves the reader exactly where they were. A changed diff is
+// left reset to the top by reload, since the old position no longer maps onto it.
+func (m *model) preserveDiffView(reload func()) {
+	prevDiff := m.diff
+	prevOffset, prevCursor := m.diffOffset, m.diffCursor
+	prevRevealed := m.revealed
+	reload()
+	if diffLinesEqual(prevDiff, m.diff) {
+		m.revealed = prevRevealed
+		m.rebuildView()
+		m.diffOffset = prevOffset
+		m.diffCursor = prevCursor
+		m.clampDiffOffset()
+		m.clampDiffCursor()
+	}
+}
+
+// diffLinesEqual reports whether two pristine diffs are identical line-for-line.
+// diff.Line is all comparable fields, so a plain == suffices per element.
+func diffLinesEqual(a, b []diff.Line) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // clampCommitCursor keeps the history cursor within the (possibly reloaded)

@@ -104,5 +104,17 @@ auto-detected base branch.
     invariant — every rendered line must be ≤ terminal width.
   - `nyanBar` (view.go) pins a nyan-cat scroll-progress indicator to the bottom
     of the diff pane: position = scroll fraction, rainbow trail behind. A
-    `tickMsg` loop (~7fps, `update.go`) wiggles the cat's face; it's the only
-    thing driving repaints, so there's no idle redraw beyond it.
+    `tickMsg` loop (~7fps, `update.go`) wiggles the cat's face — the main idle
+    repaint driver.
+  - Background git sync (`update.go`): a second, slower self-pacing tick
+    (`syncInterval`, ~1.5s) runs `git.Fingerprint` in the tick goroutine (off the
+    UI thread) and returns a `gitStateMsg`. `Fingerprint` is a cheap state hash —
+    HEAD + base tip + porcelain status + each changed path's size/mtime — that
+    moves on commits, checkouts, staging, and in-place edits without recomputing
+    the diff; the (heavier) `refresh()` runs only when it differs from the last
+    poll. `refresh()` (shared with the manual `r` key) is position-preserving:
+    `reselectPath`/`reselectCommit` keep the same file/commit selected across the
+    rebuild, and `preserveDiffView` holds scroll/cursor/expansion whenever the
+    reloaded diff is byte-identical (`diffLinesEqual`), so a sync that didn't
+    touch the visible file leaves the reader exactly where they were. In
+    `viewCommit` the immutable commit tree is left untouched.
