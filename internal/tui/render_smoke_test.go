@@ -26,9 +26,10 @@ index 1111111..2222222 100644
 
 func sampleModel() model {
 	m := model{
-		baseName:  "master",
-		branch:    "feature/long-branch-name",
-		shortstat: "3 files changed, 42 insertions(+), 7 deletions(-)",
+		baseName:      "master",
+		baseIsDefault: true,
+		branch:        "feature/long-branch-name",
+		shortstat:     "3 files changed, 42 insertions(+), 7 deletions(-)",
 		files: []git.FileChange{
 			{Path: "internal/tui/view.go", Status: "M", Added: 42, Deleted: 7},
 			{Path: "very/deep/nested/path/that/should/truncate/handler.go", Status: "A", Added: 120, Deleted: 0},
@@ -98,9 +99,16 @@ func commitSampleModel() model {
 func TestRenderNoWrap(t *testing.T) {
 	emptyLog := logSampleModel()
 	emptyLog.commits = nil // exercise the "no commits" empty state too
+	workingLog := logSampleModel()
+	workingLog.logWorking = true // exercise the pinned working-tree row + cursor on it
+	workingCommit := commitSampleModel()
+	workingCommit.scopeCommit, workingCommit.scopeWorking = nil, true // working-tree drill-in
 	emptyCommit := commitSampleModel()
 	emptyCommit.files, emptyCommit.rows = nil, nil // "no files in this commit" state
-	for _, m := range []model{sampleModel(), logSampleModel(), emptyLog, commitSampleModel(), emptyCommit} {
+	emptyWorking := commitSampleModel()
+	emptyWorking.scopeCommit, emptyWorking.scopeWorking = nil, true
+	emptyWorking.files, emptyWorking.rows = nil, nil // "no uncommitted changes" state
+	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -117,7 +125,9 @@ func TestRenderNoWrap(t *testing.T) {
 // unified and side-by-side diff modes, with the diff pane focused so its rows
 // are exercised.
 func TestFullScreenFill(t *testing.T) {
-	for _, m := range []model{sampleModel(), logSampleModel(), commitSampleModel()} {
+	workingLog := logSampleModel()
+	workingLog.logWorking = true
+	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, commitSampleModel()} {
 		m.focus = focusDiff
 		for _, split := range []bool{false, true} {
 			m.splitView = split
@@ -219,6 +229,41 @@ func TestCommitDrillInRestore(t *testing.T) {
 	}
 	if len(m.rows) != len(wantRows) {
 		t.Errorf("branch rows not restored: got %d, want %d", len(m.rows), len(wantRows))
+	}
+}
+
+// TestLogWorkingTreeRow checks that the pinned working-tree row shifts the
+// commit indexing by one: row 0 is the working tree (no commit), and the
+// commits follow beneath it.
+func TestLogWorkingTreeRow(t *testing.T) {
+	m := logSampleModel()
+	m.logWorking = true
+
+	if !m.onWorkingRow() {
+		t.Fatalf("cursor 0 with a working row should be the working row")
+	}
+	if c := m.selectedCommit(); c != nil {
+		t.Errorf("working row should select no commit, got %+v", c)
+	}
+	if got, want := m.logRowCount(), len(m.commits)+1; got != want {
+		t.Errorf("logRowCount = %d, want %d", got, want)
+	}
+
+	m.moveCommitCursor(1)
+	if m.onWorkingRow() {
+		t.Errorf("after one move down the cursor should be off the working row")
+	}
+	if c := m.selectedCommit(); c == nil || c.Short != "aaa1111" {
+		t.Errorf("row 1 should be the first commit, got %+v", c)
+	}
+
+	// Clamp at the bottom: the last row is the last commit, not past it.
+	m.moveCommitCursor(99)
+	if m.commitCursor != m.logRowCount()-1 {
+		t.Errorf("cursor should clamp to last row %d, got %d", m.logRowCount()-1, m.commitCursor)
+	}
+	if c := m.selectedCommit(); c == nil || c.Short != "ccc3333" {
+		t.Errorf("last row should be the last commit, got %+v", c)
 	}
 }
 

@@ -52,7 +52,22 @@ auto-detected base branch.
     highlighted commit's full combined diff — `j/k` move the commit cursor
     (`loadCommitDiff`, memoized per SHA in `commitDiffCache`), `Enter` drills into
     that commit (`enterCommit` → `viewCommit`), `l`/Tab focus the preview to
-    scroll it, `Esc`/`L` return to the branch view. Context-expansion is disabled
+    scroll it, `Esc`/`L` return to the branch view.
+    When the working tree is dirty, a synthetic **working-tree row** (`○ local`,
+    `workingRow`) is pinned above the commits and the cursor starts on it. It
+    represents the uncommitted delta sitting *above* HEAD, so everything about it
+    is scoped to `git diff HEAD` (NOT the branch base — diffing against base would
+    fold in the changes the individual commit rows already show). It previews the
+    combined `git.WorkingDiff` (HEAD) patch, and `Enter` (`enterWorkingTree`)
+    drills into the per-commit layout (`viewCommit`) with `scopeWorking` set:
+    `CommitFiles`-style the tree comes from `ChangedFiles(repo, "HEAD")` (so it
+    includes untracked files) and each file's diff is `git diff HEAD -- path`
+    (`loadDiff` branches on `scopeWorking`). Unlike a real commit, that drill-in
+    is mutable, so `refresh` rebuilds its file list from `git diff HEAD`. The row
+    shifts commit indexing by one — `logWorking`/`logRowCount`/`onWorkingRow`/
+    `commitIndex` mediate every cursor↔commit mapping, so `selectedCommit` is nil
+    while the cursor sits on it.
+    Context-expansion is disabled
     there (the multi-file patch has no single backing file). The combined diff
     *is* syntax-highlighted, per file: `m.lexer` stays nil, and `renderCode`
     instead lexes each line with `lineLexer`, which picks a lexer from the line's

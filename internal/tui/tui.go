@@ -24,9 +24,11 @@ func Run(dir, baseName string) error {
 		return err
 	}
 
+	defaultBranch := git.DefaultBranch(repo)
 	if baseName == "" {
-		baseName = git.DefaultBranch(repo)
+		baseName = defaultBranch
 	}
+	baseIsDefault := baseName == defaultBranch
 	base := git.BaseRef(repo, baseName)
 
 	files, err := git.ChangedFiles(repo, base)
@@ -38,7 +40,7 @@ func Run(dir, baseName string) error {
 
 	dark := DetectAndApplyTheme()
 
-	p := tea.NewProgram(newModel(repo, base, baseName, branch, files, shortstat, dark))
+	p := tea.NewProgram(newModel(repo, base, baseName, baseIsDefault, branch, files, shortstat, dark))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
 		os.Exit(1)

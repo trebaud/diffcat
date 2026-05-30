@@ -39,11 +39,12 @@ type model struct {
 	focus    focusPane // pane that j/k/gg/G operate on
 	pendingG bool      // first half of the `gg` chord was pressed
 
-	repo      string
-	base      string // ref the diff is computed against (merge base of master/HEAD)
-	baseName  string // human label for the base branch
-	branch    string // current branch
-	shortstat string
+	repo          string
+	base          string // ref the diff is computed against (merge base of master/HEAD)
+	baseName      string // human label for the base branch
+	baseIsDefault bool   // baseName is the repo's default branch (master/main) — surfaced in the header
+	branch        string // current branch
+	shortstat     string
 
 	files []git.FileChange // raw change list, source of truth for the tree
 
@@ -63,12 +64,22 @@ type model struct {
 	commitCursor    int
 	commitDiffCache map[string][]diff.Line
 
+	// logWorking is true when the history list shows a synthetic "working tree"
+	// entry pinned above the commits (i.e. there are uncommitted changes). When
+	// set, commitCursor 0 selects that entry rather than a commit, so the list
+	// indexes shift by one (see logRowCount/onWorkingRow/commitIndex).
+	logWorking bool
+
 	// Per-commit drill-in (viewCommit). scopeCommit is the commit whose files the
 	// tree currently shows (nil outside viewCommit); its SHA scopes loadDiff to
 	// that commit's patch. Drilling in repurposes the shared tree fields, so the
 	// branch tree is stashed in branchFiles/branchRows/branchCursor and restored
 	// verbatim on the way back to the history list.
+	// scopeWorking drills the working-tree entry into the same per-commit layout
+	// (viewCommit), but scoped to `git diff HEAD` — the uncommitted changes —
+	// rather than a commit's patch. It and scopeCommit are mutually exclusive.
 	scopeCommit  *git.Commit
+	scopeWorking bool
 	branchFiles  []git.FileChange
 	branchRows   []treeRow
 	branchCursor int
@@ -115,11 +126,12 @@ type model struct {
 	err      error
 }
 
-func newModel(repo, base, baseName, branch string, files []git.FileChange, shortstat string, dark bool) model {
+func newModel(repo, base, baseName string, baseIsDefault bool, branch string, files []git.FileChange, shortstat string, dark bool) model {
 	m := model{
 		repo:            repo,
 		base:            base,
 		baseName:        baseName,
+		baseIsDefault:   baseIsDefault,
 		branch:          branch,
 		shortstat:       shortstat,
 		files:           files,
@@ -210,9 +222,15 @@ func (m *model) loadDiff() {
 	}
 	m.lexer = lexerFor(f.Path)
 	var raw string
-	if m.scopeCommit != nil {
+	switch {
+	case m.scopeCommit != nil:
 		raw = git.CommitFileDiff(m.repo, m.scopeCommit.SHA, f.Path)
-	} else {
+	case m.scopeWorking:
+		// Working-tree drill-in: the uncommitted delta for this file is its diff
+		// against HEAD (the new side is the working-tree file, so the FileContent
+		// branch below already applies — same as the default branch view).
+		raw = git.FileDiff(m.repo, "HEAD", f.Path, f.Status)
+	default:
 		raw = git.FileDiff(m.repo, m.base, f.Path, f.Status)
 	}
 	if raw == "" {
