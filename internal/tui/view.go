@@ -106,14 +106,14 @@ func (m model) headerView() string {
 		base = "base"
 	}
 	// Make the comparison explicit and visually distinct: the current branch in
-	// bright text, then a spelled-out "diff against" and the base branch as a blue
-	// pill (tagged "default branch" when it's the repo default master/main), so
-	// it's never ambiguous what the diff is measured against.
+	// bright text, an arrow, then the base branch as a blue pill (tagged "default"
+	// when it's the repo default master/main), so it's never ambiguous what the
+	// diff is measured against.
 	mid := "  " + branchStyle.Render(branchLabel(m.branch))
-	mid += mutedStyle.Render("  diff against  ")
+	mid += mutedStyle.Render(" → ")
 	mid += baseBadgeStyle.Render(" " + base + " ")
 	if m.baseIsDefault {
-		mid += mutedStyle.Render("  default branch")
+		mid += mutedStyle.Render(" default")
 	}
 	stat := ""
 	if m.shortstat != "" {
