@@ -25,9 +25,10 @@ const (
 type viewMode int
 
 const (
-	viewBranch viewMode = iota // file tree (left) + selected file's diff (right)
-	viewLog                    // commit list (left) + selected commit's diff (right)
-	viewCommit                 // one commit's file tree (left) + its per-file diff (right)
+	viewBranch   viewMode = iota // file tree (left) + selected file's diff (right)
+	viewLog                      // commit list (left) + selected commit's diff (right)
+	viewCommit                   // one commit's file tree (left) + its per-file diff (right)
+	viewOverview                 // full-screen branch summary (churn bars + languages)
 )
 
 // model is the Elm-architecture state for the diff viewer. The left pane lists
@@ -137,6 +138,26 @@ type model struct {
 	// message body) for the in-scope commit; detailsScroll windows a long body.
 	showCommitDetails bool
 	detailsScroll     int
+
+	// Diff search (vim-style `/`). searchActive is true while typing a query in
+	// the footer prompt (searchInput is the live buffer); on Enter it commits to
+	// searchQuery. searchHits are the indices into viewLines whose Text matches,
+	// in order, and searchIdx is the current one — n/N step through them.
+	searchActive bool
+	searchInput  string
+	searchQuery  string
+	searchHits   []int
+	searchIdx    int
+
+	// Fuzzy file jump (`f`). fileFindActive is true while the floating picker is
+	// open; fileFindInput is the query and fileFindSel the highlighted result.
+	fileFindActive bool
+	fileFindInput  string
+	fileFindSel    int
+
+	// Overview dashboard (viewOverview, toggled with `S`). overviewCursor is the
+	// selected file row in the per-file churn list.
+	overviewCursor int
 
 	err error
 }
@@ -281,6 +302,7 @@ func (m *model) loadDiff() {
 	m.lexer = nil
 	m.hlCache = map[string][]span{}
 	m.pathLexers = map[string]chroma.Lexer{}
+	m.resetSearch()
 	f := m.selectedFile()
 	if f == nil {
 		return
@@ -356,6 +378,7 @@ func (m *model) rebuildView() {
 	m.viewLines = diff.BuildView(m.diff, m.fileLines, m.gaps, m.revealed, expandWindow)
 	m.splitRows = diff.SplitRows(m.viewLines)
 	m.lineDigits = lineDigits(m.viewLines)
+	m.recomputeSearch()
 	m.clampDiffOffset()
 	m.clampDiffCursor()
 }

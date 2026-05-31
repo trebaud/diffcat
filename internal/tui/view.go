@@ -42,6 +42,15 @@ func (m model) render() string {
 		return m.tooSmallView()
 	}
 
+	// The overview dashboard is a single full-width pane, not the two-pane split.
+	if m.mode == viewOverview {
+		screen := m.overviewView()
+		if m.showHelp {
+			return m.floatOverlay(screen, m.helpBox())
+		}
+		return screen
+	}
+
 	// Proportional split with a cap: the file list takes ~35% but never grows
 	// past 40 cols (lists don't benefit from more) nor shrinks below 22.
 	listWidth := m.width * 35 / 100
@@ -85,6 +94,9 @@ func (m model) render() string {
 	}
 	if m.showCommitDetails {
 		return m.floatOverlay(screen, m.commitDetailsBox())
+	}
+	if m.fileFindActive {
+		return m.floatOverlay(screen, m.fileFindBox())
 	}
 	return screen
 }
@@ -151,6 +163,14 @@ func (m model) headerView() string {
 		mid := mutedStyle.Render(fmt.Sprintf("  %s · history", branchLabel(m.branch)))
 		count := "  " + headingStyle.Render(fmt.Sprintf("%d commits", len(m.commits)))
 		return left + mid + count
+	}
+	if m.mode == viewOverview {
+		mid := mutedStyle.Render(fmt.Sprintf("  %s · overview", branchLabel(m.branch)))
+		stat := ""
+		if m.shortstat != "" {
+			stat = "  " + headingStyle.Render(m.shortstat)
+		}
+		return left + mid + stat
 	}
 	if m.mode == viewCommit {
 		if m.scopeWorking {
@@ -573,8 +593,9 @@ func (m model) diffWindow(width, rows int) []string {
 		return out
 	}
 	end := min(m.diffOffset+rows, len(m.viewLines))
+	curHit := m.currentHitIndex()
 	for i := m.diffOffset; i < end; i++ {
-		out = append(out, m.renderUnifiedLine(m.viewLines[i], width, i == cursor))
+		out = append(out, m.renderUnifiedLine(m.viewLines[i], width, i == cursor, i == curHit))
 	}
 	return out
 }
@@ -594,7 +615,7 @@ func expandLabel(l diff.Line) string {
 // renderUnifiedLine renders one inline-diff row: "old new ± code" with the whole
 // row tinted green (add) or red (del), GitHub-style. sel marks the cursor row,
 // which is painted with the selection background instead of its kind tint.
-func (m model) renderUnifiedLine(l diff.Line, width int, sel bool) string {
+func (m model) renderUnifiedLine(l diff.Line, width int, sel, searchCur bool) string {
 	switch l.Kind {
 	case diff.Hunk:
 		return fullRowStyle(hunkLineStyle, sel).Width(width).Render(truncateText(l.Text, width))
@@ -614,7 +635,9 @@ func (m model) renderUnifiedLine(l diff.Line, width int, sel bool) string {
 	if avail < 1 {
 		avail = 1
 	}
-	return gut + m.renderCode(l.Text, m.lineLexer(l), avail, bg, emphBg, l.Emph)
+	// Search highlight survives the selection tint: the current match is normally
+	// the cursor row, so suppressing it on selection would hide the n/N target.
+	return gut + m.renderCode(l.Text, m.lineLexer(l), avail, bg, emphBg, l.Emph, m.searchRanges(l), searchCur)
 }
 
 // fullRowStyle returns the style for a full-width row, swapping in the selection
@@ -671,7 +694,7 @@ func (m model) renderSplitSide(l *diff.Line, width int, newSide, sel bool) strin
 	if avail < 1 {
 		avail = 1
 	}
-	return gut + m.renderCode(l.Text, m.lineLexer(*l), avail, bg, emphBg, l.Emph)
+	return gut + m.renderCode(l.Text, m.lineLexer(*l), avail, bg, emphBg, l.Emph, m.searchRanges(*l), l == m.currentHitLine())
 }
 
 // lineStyles returns the gutter style, the code-body background tint (nil for
@@ -694,7 +717,7 @@ func lineStyles(kind diff.Kind) (num lipgloss.Style, bg, emphBg color.Color, mar
 // continuous band beneath the colored tokens. The rune ranges in emph (over the
 // raw text) are painted with emphBg instead — the stronger word-level tint that
 // marks exactly what changed within the line.
-func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg, emphBg color.Color, emph [][2]int) string {
+func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg, emphBg color.Color, emph, search [][2]int, searchCur bool) string {
 	if width <= 0 {
 		return ""
 	}
@@ -706,11 +729,21 @@ func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg, emphBg
 	if emphBg != nil {
 		emphStyle = lipgloss.NewStyle().Background(emphBg)
 	}
+	// A search hit overrides both the body and word-emphasis tints; the current
+	// match (n/N target) reads brighter than the rest.
+	searchHitBg := colSearchBg
+	if searchCur {
+		searchHitBg = colSearchCurBg
+	}
+	searchStyle := lipgloss.NewStyle().Background(searchHitBg)
 
 	expanded := expandTabs(text)
-	var mask []bool
+	var mask, searchMask []bool
 	if len(emph) > 0 && emphBg != nil {
 		mask = expandedMask(text, emph)
+	}
+	if len(search) > 0 {
+		searchMask = expandedMask(text, search)
 	}
 
 	var b strings.Builder
@@ -718,7 +751,7 @@ func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg, emphBg
 	b.WriteString(base.Render(" ")) // left padding, matching the gutter space
 	used++
 
-	ri := 0 // rune offset into the expanded text, to index mask
+	ri := 0 // rune offset into the expanded text, to index the masks
 	for _, sp := range m.highlight(lexer, expanded) {
 		runes := []rune(sp.text)
 		k := 0
@@ -726,16 +759,20 @@ func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg, emphBg
 			if used >= width {
 				break
 			}
-			// Group the longest run of runes that share an emphasis state so each
-			// span is rendered with a single background.
+			// Group the longest run of runes that share both an emphasis and a
+			// search state so each span is rendered with a single background.
 			em := maskAt(mask, ri+k)
+			hit := maskAt(searchMask, ri+k)
 			j := k + 1
-			for j < len(runes) && maskAt(mask, ri+j) == em {
+			for j < len(runes) && maskAt(mask, ri+j) == em && maskAt(searchMask, ri+j) == hit {
 				j++
 			}
 			st := base
 			if em {
 				st = emphStyle
+			}
+			if hit {
+				st = searchStyle
 			}
 			if sp.fg != nil {
 				st = st.Foreground(sp.fg)
@@ -908,22 +945,43 @@ func (m model) paneHeading(text string, pane focusPane) string {
 }
 
 func (m model) footerView() string {
+	// While typing a query the footer becomes the search prompt.
+	if m.searchActive {
+		return selectedStyle.Render("/") + m.searchInput + selectedStyle.Render("▌")
+	}
 	var keys []string
 	switch m.mode {
+	case viewOverview:
+		keys = []string{
+			"j/k move", "↵ open file", "S/esc back", "t theme", "? help", "q quit",
+		}
+		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewLog:
 		keys = []string{
 			"j/k select", "h/l ⇄ pane", "↵ open", "d details", "gg/G top/bot", "s split", "t theme", "L/esc back", "? help", "q quit",
 		}
 	case viewCommit:
 		keys = []string{
-			"j/k move", "h/l ⇄ pane", "↵ open/fold", "d details", "gg/G top/bot", "s split", "t theme", "esc back", "? help", "q quit",
+			"j/k move", "h/l ⇄ pane", "↵ open/fold", "f find", "/ search", "d details", "s split", "t theme", "esc back", "? help", "q quit",
 		}
 	default:
 		keys = []string{
-			"j/k move", "h/l ⇄ pane", "↵ open/fold/expand", "gg/G top/bot", "C-d/C-u half", "s split", "t theme", "L history", "? help", "q quit",
+			"j/k move", "h/l ⇄ pane", "↵ open/fold/expand", "f find", "/ search", "S overview", "s split", "t theme", "L history", "? help", "q quit",
 		}
 	}
-	return mutedStyle.Render(strings.Join(keys, "  ·  "))
+	footer := mutedStyle.Render(strings.Join(keys, "  ·  "))
+	// A committed query shows its match position (or "no matches") ahead of the
+	// keybindings so the reader knows where n/N will land.
+	if m.searchQuery != "" {
+		status := "/" + m.searchQuery + " "
+		if len(m.searchHits) == 0 {
+			status += "no matches"
+		} else {
+			status += fmt.Sprintf("%d/%d", m.searchIdx+1, len(m.searchHits))
+		}
+		footer = selectedStyle.Render(status) + mutedStyle.Render("  ·  ") + footer
+	}
+	return footer
 }
 
 func (m model) helpBox() string {
@@ -934,6 +992,7 @@ func (m model) helpBox() string {
 		"  h / l        focus file list / diff pane",
 		"  Tab          toggle focused pane",
 		"  Enter / o    open file's diff / fold a folder / expand context",
+		"  f            fuzzy-jump to a changed file by name",
 		"",
 		headingStyle.Render("  motions (act on the focused pane)"),
 		"  j / k        move cursor down / up one line",
@@ -943,6 +1002,7 @@ func (m model) helpBox() string {
 		"",
 		headingStyle.Render("  diff"),
 		"  ↵ / o on  ↕  expand hidden context (↓ below, ↑ above)",
+		"  /            search the open diff (n / N jump between matches)",
 		"",
 		headingStyle.Render("  history"),
 		"  L            toggle the commit-history view",
@@ -953,6 +1013,7 @@ func (m model) helpBox() string {
 		"  Esc          step back: commit tree → history → branch diff",
 		"",
 		headingStyle.Render("  view"),
+		"  S            toggle the branch overview (churn bars + languages)",
 		"  s            toggle unified / side-by-side",
 		"  t            toggle light / dark theme",
 		"  r            refresh from disk (also auto-syncs in the background)",

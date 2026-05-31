@@ -122,7 +122,24 @@ func TestRenderNoWrap(t *testing.T) {
 	details.showCommitDetails = true
 	detailsScrolled := details
 	detailsScrolled.detailsScroll = 99 // past the end → clamps
-	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled} {
+	// The overview dashboard (churn bars + language breakdown).
+	overview := sampleModel()
+	overview.mode = viewOverview
+	overview.commits = logSampleModel().commits
+	overviewEmpty := overview
+	overviewEmpty.files, overviewEmpty.rows = nil, nil // "no changes" state
+	// A committed diff search, the active search prompt, and the fuzzy file picker.
+	searched := sampleModel()
+	searched.focus = focusDiff
+	searched.searchQuery = "line"
+	searched.recomputeSearch()
+	searchPrompt := sampleModel()
+	searchPrompt.searchActive = true
+	searchPrompt.searchInput = "a very long query that should be truncated by the footer padding logic"
+	finding := sampleModel()
+	finding.fileFindActive = true
+	finding.fileFindInput = "view"
+	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewEmpty, searched, searchPrompt, finding} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -141,7 +158,10 @@ func TestRenderNoWrap(t *testing.T) {
 func TestFullScreenFill(t *testing.T) {
 	workingLog := logSampleModel()
 	workingLog.logWorking = true
-	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, commitSampleModel()} {
+	overview := sampleModel()
+	overview.mode = viewOverview
+	overview.commits = logSampleModel().commits
+	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, commitSampleModel(), overview} {
 		m.focus = focusDiff
 		for _, split := range []bool{false, true} {
 			m.splitView = split

@@ -89,6 +89,12 @@ var (
 	// pulseRamp is a soft dim→bright ramp of the info-blue tone; a file a sync
 	// changed but the reader hasn't opened breathes its status glyph through it.
 	pulseRamp []color.Color
+
+	// Diff-search highlight: a soft amber band on every match, and a brighter gold
+	// on the one under the cursor (the n/N target) — the standard "find" colors,
+	// painted by renderCode over the row tint.
+	colSearchBg    color.Color
+	colSearchCurBg color.Color
 )
 
 func init() { ApplyTheme(true) }
@@ -178,6 +184,12 @@ func ApplyTheme(isDark bool) {
 		ld(lipgloss.Color("#297ecb"), lipgloss.Color("#5895d3")),
 		ld(lipgloss.Color("#006ac5"), lipgloss.Color("#67b0f9")),
 	}
+
+	// Search highlight: GitHub's find-on-page amber. The current match steps up to
+	// a brighter gold so n/N's target stands out from the other hits. Tuned per
+	// theme so token foregrounds stay legible over the band.
+	colSearchBg = ld(lipgloss.Color("#fff8c5"), lipgloss.Color("#4a3a00"))
+	colSearchCurBg = ld(lipgloss.Color("#f6c343"), lipgloss.Color("#9e6a03"))
 
 	// Header: the current branch reads bright (inherits the terminal fg, just
 	// bold), while the base branch is a blue "info" pill — the same GitHub blue

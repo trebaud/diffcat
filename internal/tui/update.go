@@ -102,6 +102,64 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.searchActive {
+		// Typing a diff-search query in the footer prompt. Enter commits it and
+		// jumps to the first match; Esc cancels; everything else edits the buffer.
+		switch msg.String() {
+		case "esc":
+			m.searchActive = false
+			m.searchInput = ""
+		case "enter":
+			m.searchActive = false
+			m.searchQuery = m.searchInput
+			m.recomputeSearch()
+			m.jumpToFirstHit()
+		case "backspace":
+			if r := []rune(m.searchInput); len(r) > 0 {
+				m.searchInput = string(r[:len(r)-1])
+			}
+		default:
+			if s := msg.String(); len([]rune(s)) == 1 {
+				m.searchInput += s
+			}
+		}
+		return m, nil
+	}
+
+	if m.fileFindActive {
+		// The fuzzy file-jump picker is open. Enter jumps to the selected file;
+		// Esc closes; arrows / ctrl+n/p move the selection; the rest edits the query.
+		matches := m.fileFindMatches()
+		switch msg.String() {
+		case "esc":
+			m.fileFindActive = false
+		case "enter":
+			if m.fileFindSel >= 0 && m.fileFindSel < len(matches) {
+				m.jumpToFile(matches[m.fileFindSel].path)
+			}
+			m.fileFindActive = false
+		case "down", "ctrl+n":
+			if m.fileFindSel < len(matches)-1 {
+				m.fileFindSel++
+			}
+		case "up", "ctrl+p":
+			if m.fileFindSel > 0 {
+				m.fileFindSel--
+			}
+		case "backspace":
+			if r := []rune(m.fileFindInput); len(r) > 0 {
+				m.fileFindInput = string(r[:len(r)-1])
+			}
+			m.fileFindSel = 0
+		default:
+			if s := msg.String(); len([]rune(s)) == 1 {
+				m.fileFindInput += s
+				m.fileFindSel = 0
+			}
+		}
+		return m, nil
+	}
+
 	key := msg.String()
 
 	// `gg` chord: a pending `g` followed by another `g` jumps to the top of
@@ -127,6 +185,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case viewLog:
 			m.exitLog()
+			return m, nil
+		case viewOverview:
+			m.exitOverview()
 			return m, nil
 		}
 		return m, tea.Quit
@@ -163,6 +224,16 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.syncFingerprint = git.Fingerprint(m.repo, m.baseName)
 		return m, nil
 
+	case "S":
+		// Toggle the branch overview dashboard (only from / back to the branch view).
+		switch m.mode {
+		case viewOverview:
+			m.exitOverview()
+		case viewBranch:
+			m.enterOverview()
+		}
+		return m, nil
+
 	case "s":
 		// Toggle unified ↔ side-by-side. Row counts differ between modes, so
 		// reset to the top to keep the scroll position sensible. Expansions are
@@ -177,6 +248,31 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.toggleTheme()
 		return m, nil
 
+	// --- diff search (`/` to enter a query, n/N to step through matches) ---
+	case "/":
+		// Only meaningful where a diff is showing; harmless (an empty prompt) on a
+		// folder or empty tree. Not in the overview, which has no diff pane.
+		if m.mode != viewOverview {
+			m.searchActive = true
+			m.searchInput = ""
+		}
+		return m, nil
+	case "n":
+		m.nextHit()
+		return m, nil
+	case "N":
+		m.prevHit()
+		return m, nil
+
+	// --- fuzzy file jump (only in the file-tree modes) ---
+	case "f":
+		if m.mode == viewBranch || m.mode == viewCommit {
+			m.fileFindActive = true
+			m.fileFindInput = ""
+			m.fileFindSel = 0
+		}
+		return m, nil
+
 	// --- pane focus (vim window motions) ---
 	case "tab":
 		m.toggleFocus()
@@ -188,6 +284,11 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.focus = focusDiff
 		return m, nil
 	case "enter", "o":
+		// Overview: open the highlighted file in the normal branch diff view.
+		if m.mode == viewOverview {
+			m.enterOverviewFile()
+			return m, nil
+		}
 		// History list: enter drills into the highlighted commit's file tree, or
 		// the working-tree row into the full branch view. (Scroll its preview
 		// instead with l/Tab to focus the diff pane.)
@@ -269,6 +370,8 @@ func (m *model) toggleFocus() {
 // diff's line cursor.
 func (m *model) moveDown() {
 	switch {
+	case m.mode == viewOverview:
+		m.moveOverviewCursor(1)
 	case m.focus != focusFiles:
 		m.moveDiffCursor(1)
 	case m.mode == viewLog:
@@ -280,6 +383,8 @@ func (m *model) moveDown() {
 
 func (m *model) moveUp() {
 	switch {
+	case m.mode == viewOverview:
+		m.moveOverviewCursor(-1)
 	case m.focus != focusFiles:
 		m.moveDiffCursor(-1)
 	case m.mode == viewLog:
@@ -291,6 +396,8 @@ func (m *model) moveUp() {
 
 func (m *model) gotoTop() {
 	switch {
+	case m.mode == viewOverview:
+		m.overviewCursor = 0
 	case m.focus != focusFiles:
 		m.diffCursor = 0
 		m.ensureCursorVisible()
@@ -305,6 +412,8 @@ func (m *model) gotoTop() {
 
 func (m *model) gotoBottom() {
 	switch {
+	case m.mode == viewOverview:
+		m.overviewCursor = max(0, len(m.files)-1)
 	case m.focus != focusFiles:
 		m.diffCursor = m.totalDiffRows() - 1
 		m.ensureCursorVisible()

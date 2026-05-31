@@ -11,9 +11,9 @@ import (
 
 func TestExpandTabs(t *testing.T) {
 	cases := map[string]string{
-		"\tx":     "    x",  // one tab → next stop at col 4
-		"a\tb":    "a   b",  // partial tab fills to col 4
-		"ab\tc":   "ab  c",  //
+		"\tx":     "    x", // one tab → next stop at col 4
+		"a\tb":    "a   b", // partial tab fills to col 4
+		"ab\tc":   "ab  c", //
 		"abcd\te": "abcd    e",
 		"no tabs": "no tabs",
 	}
@@ -38,15 +38,20 @@ func TestRenderCodeWidth(t *testing.T) {
 	}
 	for _, ln := range lines {
 		for _, w := range []int{1, 2, 5, 12, 40, 200} {
-			// Exercise both the plain path and the word-emphasis path (a range that
-			// straddles a tab) to guard the width math through the mask split.
-			out := m.renderCode(ln, m.lexer, w, diffAddBg, nil, nil)
+			// Exercise the plain path, the word-emphasis path, and the search-hit
+			// path (ranges that straddle a tab) to guard the width math through the
+			// combined mask split.
+			out := m.renderCode(ln, m.lexer, w, diffAddBg, nil, nil, nil, false)
 			if got := lipgloss.Width(out); got != w {
 				t.Errorf("renderCode(%q, %d) width = %d, want %d", ln, w, got, w)
 			}
-			emph := m.renderCode(ln, m.lexer, w, diffAddBg, diffAddEmphBg, [][2]int{{2, 9}})
+			emph := m.renderCode(ln, m.lexer, w, diffAddBg, diffAddEmphBg, [][2]int{{2, 9}}, nil, false)
 			if got := lipgloss.Width(emph); got != w {
 				t.Errorf("renderCode(%q, %d) emph width = %d, want %d", ln, w, got, w)
+			}
+			search := m.renderCode(ln, m.lexer, w, diffAddBg, diffAddEmphBg, [][2]int{{2, 9}}, [][2]int{{1, 6}}, true)
+			if got := lipgloss.Width(search); got != w {
+				t.Errorf("renderCode(%q, %d) search width = %d, want %d", ln, w, got, w)
 			}
 		}
 	}

@@ -193,6 +193,7 @@ func (m *model) loadCommitDiff() {
 	m.lexer = nil
 	m.hlCache = map[string][]span{}
 	m.pathLexers = map[string]chroma.Lexer{}
+	m.resetSearch()
 
 	// The working-tree row previews the combined branch diff against base. Like a
 	// commit's combined diff it spans multiple files, so it rides the same
