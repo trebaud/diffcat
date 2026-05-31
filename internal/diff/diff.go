@@ -42,6 +42,15 @@ type Line struct {
 	NewNum int
 	Path   string
 
+	// Emph are the rune ranges within Text that changed at the word level,
+	// computed by pairing this line with its counterpart (a Del with the Add that
+	// replaced it). Each is a [start, end) half-open rune offset into Text. Only
+	// set on Add/Del lines that have a sufficiently similar counterpart; nil
+	// otherwise (so the renderer falls back to a flat full-line tint). This is
+	// GitHub's two-tone diff: a soft tint on the whole line, a stronger one on the
+	// exact words that differ.
+	Emph [][2]int
+
 	Dir    Dir // Expand only: which direction this affordance reveals
 	GapID  int // Expand only: index into the gap list it belongs to
 	Hidden int // Expand only: count of still-hidden lines it covers
@@ -106,6 +115,7 @@ func Parse(raw string) []Line {
 			out = append(out, Line{Kind: Meta, Text: ln, Path: path})
 		}
 	}
+	markWordDiff(out)
 	return out
 }
 
@@ -163,6 +173,169 @@ func SplitRows(lines []Line) []Row {
 		}
 	}
 	return rows
+}
+
+// markWordDiff fills in the per-line Emph ranges by pairing each removed line
+// with the added line that replaced it (the k-th Del with the k-th Add in a
+// consecutive Del/Add block — the same pairing SplitRows uses) and running a
+// token-level diff between the two. The tokens absent from their longest common
+// subsequence are the words that changed, and their rune ranges become Emph.
+func markWordDiff(lines []Line) {
+	for i := 0; i < len(lines); {
+		if lines[i].Kind != Del && lines[i].Kind != Add {
+			i++
+			continue
+		}
+		start := i
+		for i < len(lines) && (lines[i].Kind == Del || lines[i].Kind == Add) {
+			i++
+		}
+		markBlock(lines[start:i])
+	}
+}
+
+// markBlock pairs the removals and additions in one Del/Add run positionally and
+// marks each pair's intra-line word diff.
+func markBlock(block []Line) {
+	var dels, adds []*Line
+	for k := range block {
+		switch block[k].Kind {
+		case Del:
+			dels = append(dels, &block[k])
+		case Add:
+			adds = append(adds, &block[k])
+		}
+	}
+	n := len(dels)
+	if len(adds) < n {
+		n = len(adds)
+	}
+	for k := 0; k < n; k++ {
+		markPair(dels[k], adds[k])
+	}
+}
+
+// markPair computes the word-level diff between a removed and an added line. It
+// skips lines that share too little — a wholesale replacement reads better as a
+// plain full-line tint than as two lines lit up almost end to end.
+func markPair(del, add *Line) {
+	oldTok := tokenize(del.Text)
+	newTok := tokenize(add.Text)
+	oldR, newR := wordRanges(oldTok, newTok)
+
+	// Similarity gate: if the unchanged remainder is a tiny fraction of the
+	// longer line, the two lines are effectively unrelated — leave Emph nil.
+	oldLen, newLen := len([]rune(del.Text)), len([]rune(add.Text))
+	longer := oldLen
+	if newLen > longer {
+		longer = newLen
+	}
+	common := oldLen - sumRanges(oldR)
+	if longer > 0 && float64(common)/float64(longer) < 0.25 {
+		return
+	}
+	del.Emph, add.Emph = oldR, newR
+}
+
+// token is one unit of the word diff: a run of word characters, a run of
+// whitespace, or a single other rune. start/end are its rune offsets in the line.
+type token struct {
+	text       string
+	start, end int
+}
+
+// tokenize splits a line into word/whitespace/punctuation tokens so the diff
+// aligns on word boundaries rather than individual characters.
+func tokenize(s string) []token {
+	runes := []rune(s)
+	var toks []token
+	for i := 0; i < len(runes); {
+		j := i
+		switch {
+		case isWordRune(runes[i]):
+			for j < len(runes) && isWordRune(runes[j]) {
+				j++
+			}
+		case runes[i] == ' ' || runes[i] == '\t':
+			for j < len(runes) && (runes[j] == ' ' || runes[j] == '\t') {
+				j++
+			}
+		default:
+			j = i + 1
+		}
+		toks = append(toks, token{text: string(runes[i:j]), start: i, end: j})
+		i = j
+	}
+	return toks
+}
+
+func isWordRune(r rune) bool {
+	return r == '_' ||
+		(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+		(r >= '0' && r <= '9') || r >= 0x80
+}
+
+// wordRanges runs a longest-common-subsequence diff over two token slices and
+// returns the rune ranges of the tokens that fall outside the LCS on each side —
+// the deletions (oldR) and insertions (newR). Adjacent ranges are merged.
+func wordRanges(old, new []token) (oldR, newR [][2]int) {
+	a, b := len(old), len(new)
+	// dp[i][j] = LCS length of old[i:] and new[j:].
+	dp := make([][]int, a+1)
+	for i := range dp {
+		dp[i] = make([]int, b+1)
+	}
+	for i := a - 1; i >= 0; i-- {
+		for j := b - 1; j >= 0; j-- {
+			if old[i].text == new[j].text {
+				dp[i][j] = dp[i+1][j+1] + 1
+			} else if dp[i+1][j] >= dp[i][j+1] {
+				dp[i][j] = dp[i+1][j]
+			} else {
+				dp[i][j] = dp[i][j+1]
+			}
+		}
+	}
+	i, j := 0, 0
+	for i < a && j < b {
+		switch {
+		case old[i].text == new[j].text:
+			i++
+			j++
+		case dp[i+1][j] >= dp[i][j+1]:
+			oldR = appendRange(oldR, old[i])
+			i++
+		default:
+			newR = appendRange(newR, new[j])
+			j++
+		}
+	}
+	for ; i < a; i++ {
+		oldR = appendRange(oldR, old[i])
+	}
+	for ; j < b; j++ {
+		newR = appendRange(newR, new[j])
+	}
+	return oldR, newR
+}
+
+// appendRange adds a token's range, coalescing with the previous range when they
+// abut so consecutive changed tokens render as one continuous band.
+func appendRange(rs [][2]int, t token) [][2]int {
+	if n := len(rs); n > 0 && rs[n-1][1] == t.start {
+		rs[n-1][1] = t.end
+		return rs
+	}
+	return append(rs, [2]int{t.start, t.end})
+}
+
+// sumRanges totals the rune length covered by a set of ranges.
+func sumRanges(rs [][2]int) int {
+	n := 0
+	for _, r := range rs {
+		n += r[1] - r[0]
+	}
+	return n
 }
 
 // Gaps finds the runs of unchanged lines git omitted: before the first hunk,

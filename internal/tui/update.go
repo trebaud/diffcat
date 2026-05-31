@@ -476,13 +476,17 @@ func (m *model) preserveDiffView(reload func()) {
 }
 
 // diffLinesEqual reports whether two pristine diffs are identical line-for-line.
-// diff.Line is all comparable fields, so a plain == suffices per element.
+// It compares the scalar fields directly; the Emph ranges are a deterministic
+// function of the lines' text and kind, so equal scalar fields imply equal Emph.
 func diffLinesEqual(a, b []diff.Line) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i] != b[i] {
+		x, y := a[i], b[i]
+		if x.Kind != y.Kind || x.Text != y.Text || x.OldNum != y.OldNum ||
+			x.NewNum != y.NewNum || x.Path != y.Path || x.Dir != y.Dir ||
+			x.GapID != y.GapID || x.Hidden != y.Hidden {
 			return false
 		}
 	}

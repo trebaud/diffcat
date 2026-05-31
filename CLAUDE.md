@@ -37,7 +37,12 @@ auto-detected base branch.
 - `diff/diff.go` — Pure parser of unified `git diff` output. `Parse` yields
   typed, line-numbered `Line`s (Context/Add/Del/Hunk/Meta); `SplitRows` pairs
   each removal block with the additions that follow for the side-by-side view.
-  No rendering — the TUI styles these.
+  No rendering — the TUI styles these. `Parse` also runs `markWordDiff`: it pairs
+  the k-th `Del` with the k-th `Add` in each consecutive Del/Add run and computes
+  a token-level LCS diff (`tokenize`/`wordRanges`) between them, recording the
+  changed rune ranges on each line's `Emph` field — GitHub's intra-line word
+  highlight. A similarity gate leaves `Emph` nil when the two lines share too
+  little (a wholesale replacement reads better as a flat full-line tint).
 - `tui/` — Bubble Tea (Elm architecture) viewer. Two panes: file tree (left),
   diff (right). Diff scrolling is tracked manually via `diffOffset` rather than
   a viewport component.
@@ -96,7 +101,12 @@ auto-detected base branch.
     refresh). `treeRow` (view.go) renders one line; selecting a folder shows a
     roll-up in the diff pane instead of a diff.
   - Diffs render GitHub-style: full-row green/red background tints with
-    line-number gutters (`renderUnifiedLine`). `s` toggles `splitView` for a
+    line-number gutters (`renderUnifiedLine`). The exact words that changed within
+    a line get a stronger tint (`diffAddEmphBg`/`diffDelEmphBg`, the brighter
+    gutter tone): `renderCode` projects each line's `diff.Emph` ranges through tab
+    expansion (`expandedMask`) and paints those runs with the emphasis background
+    over the soft body band, so a line reads as a soft base tint with the changed
+    span popping out. `s` toggles `splitView` for a
     side-by-side layout (`renderSplitRow`/`renderSplitSide`) fed by
     `diff.SplitRows`. `lineDigits` sizes the gutter; row counts differ per mode
     so `totalDiffRows` drives scroll clamping and the nyan progress.

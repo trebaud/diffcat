@@ -38,9 +38,15 @@ func TestRenderCodeWidth(t *testing.T) {
 	}
 	for _, ln := range lines {
 		for _, w := range []int{1, 2, 5, 12, 40, 200} {
-			out := m.renderCode(ln, m.lexer, w, diffAddBg)
+			// Exercise both the plain path and the word-emphasis path (a range that
+			// straddles a tab) to guard the width math through the mask split.
+			out := m.renderCode(ln, m.lexer, w, diffAddBg, nil, nil)
 			if got := lipgloss.Width(out); got != w {
 				t.Errorf("renderCode(%q, %d) width = %d, want %d", ln, w, got, w)
+			}
+			emph := m.renderCode(ln, m.lexer, w, diffAddBg, diffAddEmphBg, [][2]int{{2, 9}})
+			if got := lipgloss.Width(emph); got != w {
+				t.Errorf("renderCode(%q, %d) emph width = %d, want %d", ln, w, got, w)
 			}
 		}
 	}

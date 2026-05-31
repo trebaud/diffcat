@@ -604,9 +604,9 @@ func (m model) renderUnifiedLine(l diff.Line, width int, sel bool) string {
 		return fullRowStyle(expandLineStyle, sel).Width(width).Render(truncateText(expandLabel(l), width))
 	}
 
-	numStyle, bg, marker := lineStyles(l.Kind)
+	numStyle, bg, emphBg, marker := lineStyles(l.Kind)
 	if sel {
-		numStyle, bg = selectedRowStyle, colRowBg
+		numStyle, bg, emphBg = selectedRowStyle, colRowBg, nil
 	}
 	d := m.lineDigits
 	gut := numStyle.Render(numField(l.OldNum, d) + " " + numField(l.NewNum, d) + " " + marker)
@@ -614,7 +614,7 @@ func (m model) renderUnifiedLine(l diff.Line, width int, sel bool) string {
 	if avail < 1 {
 		avail = 1
 	}
-	return gut + m.renderCode(l.Text, m.lineLexer(l), avail, bg)
+	return gut + m.renderCode(l.Text, m.lineLexer(l), avail, bg, emphBg, l.Emph)
 }
 
 // fullRowStyle returns the style for a full-width row, swapping in the selection
@@ -658,9 +658,9 @@ func (m model) renderSplitSide(l *diff.Line, width int, newSide, sel bool) strin
 		}
 		return fillerStyle.Width(width).Render("")
 	}
-	numStyle, bg, _ := lineStyles(l.Kind)
+	numStyle, bg, emphBg, _ := lineStyles(l.Kind)
 	if sel {
-		numStyle, bg = selectedRowStyle, colRowBg
+		numStyle, bg, emphBg = selectedRowStyle, colRowBg, nil
 	}
 	num := l.OldNum
 	if newSide {
@@ -671,27 +671,30 @@ func (m model) renderSplitSide(l *diff.Line, width int, newSide, sel bool) strin
 	if avail < 1 {
 		avail = 1
 	}
-	return gut + m.renderCode(l.Text, m.lineLexer(*l), avail, bg)
+	return gut + m.renderCode(l.Text, m.lineLexer(*l), avail, bg, emphBg, l.Emph)
 }
 
 // lineStyles returns the gutter style, the code-body background tint (nil for
-// context), and the marker for a line kind.
-func lineStyles(kind diff.Kind) (num lipgloss.Style, bg color.Color, marker string) {
+// context), the stronger word-level emphasis tint (nil for context), and the
+// marker for a line kind.
+func lineStyles(kind diff.Kind) (num lipgloss.Style, bg, emphBg color.Color, marker string) {
 	switch kind {
 	case diff.Add:
-		return addNumStyle, diffAddBg, "+"
+		return addNumStyle, diffAddBg, diffAddEmphBg, "+"
 	case diff.Del:
-		return delNumStyle, diffDelBg, "-"
+		return delNumStyle, diffDelBg, diffDelEmphBg, "-"
 	default:
-		return ctxNumStyle, nil, " "
+		return ctxNumStyle, nil, nil, " "
 	}
 }
 
 // renderCode renders a line of code into exactly width columns: a leading gutter
 // space, the syntax-highlighted tokens (lexed with lexer), an ellipsis if it
 // overflows, then padding — all sharing bg so the diff row tint reads as one
-// continuous band beneath the colored tokens.
-func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg color.Color) string {
+// continuous band beneath the colored tokens. The rune ranges in emph (over the
+// raw text) are painted with emphBg instead — the stronger word-level tint that
+// marks exactly what changed within the line.
+func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg, emphBg color.Color, emph [][2]int) string {
 	if width <= 0 {
 		return ""
 	}
@@ -699,37 +702,107 @@ func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg color.C
 	if bg != nil {
 		base = base.Background(bg)
 	}
+	emphStyle := base
+	if emphBg != nil {
+		emphStyle = lipgloss.NewStyle().Background(emphBg)
+	}
+
+	expanded := expandTabs(text)
+	var mask []bool
+	if len(emph) > 0 && emphBg != nil {
+		mask = expandedMask(text, emph)
+	}
 
 	var b strings.Builder
 	used := 0
 	b.WriteString(base.Render(" ")) // left padding, matching the gutter space
 	used++
 
-	for _, sp := range m.highlight(lexer, expandTabs(text)) {
-		if used >= width {
+	ri := 0 // rune offset into the expanded text, to index mask
+	for _, sp := range m.highlight(lexer, expanded) {
+		runes := []rune(sp.text)
+		k := 0
+		for k < len(runes) {
+			if used >= width {
+				break
+			}
+			// Group the longest run of runes that share an emphasis state so each
+			// span is rendered with a single background.
+			em := maskAt(mask, ri+k)
+			j := k + 1
+			for j < len(runes) && maskAt(mask, ri+j) == em {
+				j++
+			}
+			st := base
+			if em {
+				st = emphStyle
+			}
+			if sp.fg != nil {
+				st = st.Foreground(sp.fg)
+			}
+			seg := string(runes[k:j])
+			segW := lipgloss.Width(seg)
+			remaining := width - used
+			if segW <= remaining {
+				b.WriteString(st.Render(seg))
+				used += segW
+				k = j
+				continue
+			}
+			// Doesn't fit: cut leaving one column for the ellipsis, then stop.
+			cut := cutToWidth(seg, remaining-1)
+			b.WriteString(st.Render(cut))
+			b.WriteString(base.Render("…"))
+			used += lipgloss.Width(cut) + 1
+			ri = -1 // sentinel: done
 			break
 		}
-		st := base
-		if sp.fg != nil {
-			st = st.Foreground(sp.fg)
+		if ri < 0 || used >= width {
+			break
 		}
-		remaining := width - used
-		if lipgloss.Width(sp.text) <= remaining {
-			b.WriteString(st.Render(sp.text))
-			used += lipgloss.Width(sp.text)
-			continue
-		}
-		// Doesn't fit: cut leaving one column for the ellipsis, then stop.
-		seg := cutToWidth(sp.text, remaining-1)
-		b.WriteString(st.Render(seg))
-		b.WriteString(base.Render("…"))
-		used += lipgloss.Width(seg) + 1
-		break
+		ri += len(runes)
 	}
 	if used < width {
 		b.WriteString(base.Render(strings.Repeat(" ", width-used)))
 	}
 	return b.String()
+}
+
+// maskAt reads an emphasis mask defensively — out-of-range indices (no mask, or
+// width math that drifted past it) read as un-emphasized.
+func maskAt(mask []bool, i int) bool {
+	return i >= 0 && i < len(mask) && mask[i]
+}
+
+// expandedMask projects per-rune emphasis ranges over the raw text onto the
+// tab-expanded text renderCode actually paints, replicating each tab's flag
+// across the spaces it expands to so the mask stays aligned with the rendered
+// runes. It mirrors expandTabs's column math exactly.
+func expandedMask(text string, emph [][2]int) []bool {
+	runes := []rune(text)
+	raw := make([]bool, len(runes))
+	for _, r := range emph {
+		for i := r[0]; i < r[1] && i < len(raw); i++ {
+			if i >= 0 {
+				raw[i] = true
+			}
+		}
+	}
+	var mask []bool
+	col := 0
+	for i, r := range runes {
+		if r == '\t' {
+			n := tabWidth - col%tabWidth
+			for k := 0; k < n; k++ {
+				mask = append(mask, raw[i])
+			}
+			col += n
+			continue
+		}
+		mask = append(mask, raw[i])
+		col++
+	}
+	return mask
 }
 
 // numField right-aligns a line number in a fixed-width field, blank for 0.

@@ -80,6 +80,12 @@ var (
 	diffAddBg color.Color // row tint behind added lines
 	diffDelBg color.Color // row tint behind removed lines
 
+	// Stronger tints for the exact words that changed within a line — GitHub's
+	// two-tone diff. Painted by renderCode over the soft body band so the changed
+	// span pops out of the surrounding unchanged code.
+	diffAddEmphBg color.Color
+	diffDelEmphBg color.Color
+
 	// pulseRamp is a soft dim→bright ramp of the info-blue tone; a file a sync
 	// changed but the reader hasn't opened breathes its status glyph through it.
 	pulseRamp []color.Color
@@ -154,6 +160,10 @@ func ApplyTheme(isDark bool) {
 	expandBg := ld(lipgloss.Color("#eef4fb"), lipgloss.Color("#12202f"))
 
 	diffAddBg, diffDelBg = addBg, delBg
+	// The word-level emphasis reuses the brighter gutter band: GitHub's intra-line
+	// highlight (#abf2bc / #ffc1bc in light) is exactly that tone, and on the dark
+	// theme the gutter green/red already reads as a stronger step above the body.
+	diffAddEmphBg, diffDelEmphBg = addGut, delGut
 
 	// A gentle breathing ramp toward the same info-blue as hunk headers — dim to
 	// bright, so the glyph eases in and out rather than blinking. Six stops on a
