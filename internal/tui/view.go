@@ -828,16 +828,18 @@ func truncateText(s string, max int) string {
 	return string(r) + "…"
 }
 
-// nyanProgress renders the diff scroll position as a nyan cat marching from the
+// nyanProgress renders the diff-reading position as a nyan cat marching from the
 // top of the file (left edge) to the end (right edge), trailing a rainbow. The
-// cat's face/legs wiggle on each tick; the diff content fully read is the
-// rainbow length behind it.
+// cat tracks the cursor line, not the scroll offset, so it advances as you read
+// through the diff even when the whole file fits on screen. It only appears once
+// the diff pane is focused — there's no reading position to show otherwise.
 func (m model) nyanProgress(width int) string {
-	rows := m.diffViewportHeight()
-	maxOff := m.totalDiffRows() - rows
-	frac := 1.0 // whole diff fits on screen → already at the end
-	if maxOff > 0 {
-		frac = float64(m.diffOffset) / float64(maxOff)
+	if m.focus != focusDiff {
+		return strings.Repeat(" ", max(0, width))
+	}
+	frac := 0.0
+	if last := m.totalDiffRows() - 1; last > 0 {
+		frac = float64(m.diffCursor) / float64(last)
 	}
 	return nyanBar(width, frac, m.animFrame)
 }
