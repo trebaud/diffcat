@@ -297,7 +297,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.toggleFocus()
 		return m, nil
 	case "h", "left":
-		m.focus = focusFiles
+		// With the sidebar collapsed there's no list to focus — stay on the diff.
+		if m.sidebar != sidebarHidden {
+			m.focus = focusFiles
+		}
 		return m, nil
 	case "l", "right":
 		m.focus = focusDiff
@@ -377,6 +380,11 @@ func (m *model) toggleTheme() {
 }
 
 func (m *model) toggleFocus() {
+	// A collapsed sidebar has nothing to focus, so the diff stays the only target.
+	if m.sidebar == sidebarHidden {
+		m.focus = focusDiff
+		return
+	}
 	if m.focus == focusFiles {
 		m.focus = focusDiff
 	} else {
