@@ -39,9 +39,8 @@ var (
 	selectedRowStyle lipgloss.Style
 	borderStyle      lipgloss.Style
 
-	dirStyle          lipgloss.Style // folder rows in the file tree
-	treeGuideStyle    lipgloss.Style // the faint │ rails connecting tree levels
-	changedPulseStyle lipgloss.Style // pulsing highlight for files a sync just changed
+	dirStyle       lipgloss.Style // folder rows in the file tree
+	treeGuideStyle lipgloss.Style // the faint │ rails connecting tree levels
 
 	branchStyle    lipgloss.Style // the current branch name in the header
 	baseBadgeStyle lipgloss.Style // the base branch, as a colored pill in the header
@@ -65,6 +64,10 @@ var (
 
 	diffAddBg color.Color // row tint behind added lines
 	diffDelBg color.Color // row tint behind removed lines
+
+	// pulseRamp is a soft dim→bright ramp of the info-blue tone; a file a sync
+	// changed but the reader hasn't opened breathes its status glyph through it.
+	pulseRamp []color.Color
 )
 
 func init() { ApplyTheme(true) }
@@ -98,10 +101,6 @@ func ApplyTheme(isDark bool) {
 	// accent); the tree rails are as faint as the pane divider.
 	dirStyle = lipgloss.NewStyle().Foreground(colMeta).Bold(true)
 	treeGuideStyle = lipgloss.NewStyle().Foreground(colBorder)
-	// Files touched by a background sync but not yet opened pulse in the warn tone
-	// (distinct from the magenta selection accent and the add/del greens/reds) to
-	// draw the eye without being mistaken for the cursor.
-	changedPulseStyle = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
 
 	addedStyle = lipgloss.NewStyle().Foreground(colAdded)
 	removedStyle = lipgloss.NewStyle().Foreground(colRemoved)
@@ -120,6 +119,16 @@ func ApplyTheme(isDark bool) {
 	fillBg := ld(lipgloss.Color("#f6f8fa"), lipgloss.Color("#0d1117"))
 
 	diffAddBg, diffDelBg = addBg, delBg
+
+	// A gentle breathing ramp toward the same info-blue as hunk headers — dim to
+	// bright, so the glyph eases in and out rather than blinking. Distinct from the
+	// magenta selection accent and the add/del green/red.
+	pulseRamp = []color.Color{
+		ld(lipgloss.Color("#c4cdd6"), lipgloss.Color("#3a4451")),
+		ld(lipgloss.Color("#8aa6cf"), lipgloss.Color("#3f5d86")),
+		ld(lipgloss.Color("#5183cf"), lipgloss.Color("#4178bf")),
+		ld(lipgloss.Color("#2f6fdb"), lipgloss.Color("#58a6ff")),
+	}
 
 	// Header: the current branch reads bright (inherits the terminal fg, just
 	// bold), while the base branch is a blue "info" pill — the same GitHub blue
