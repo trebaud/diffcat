@@ -729,10 +729,14 @@ func nyanBar(width int, frac float64, frame int) string {
 	}
 	catX := int(frac*float64(maxX) + 0.5)
 
-	// ANSI rainbow: red, yellow, green, cyan, blue, magenta.
+	// Perceptually-even rainbow: constant OKLCH L=0.72 C=0.155, hue rotating, so
+	// every band has identical perceived brightness (raw ANSI indices banded
+	// unevenly and went dull on muted terminal themes). Degrades to the nearest
+	// ANSI on 16-color terminals.
 	trail := []color.Color{
-		lipgloss.Color("1"), lipgloss.Color("3"), lipgloss.Color("2"),
-		lipgloss.Color("6"), lipgloss.Color("4"), lipgloss.Color("5"),
+		lipgloss.Color("#f67972"), lipgloss.Color("#e19005"),
+		lipgloss.Color("#5ebd64"), lipgloss.Color("#00c1c2"),
+		lipgloss.Color("#69a3ff"), lipgloss.Color("#d480da"),
 	}
 	n := len(trail)
 
@@ -747,7 +751,7 @@ func nyanBar(width int, frac float64, frame int) string {
 		s := lipgloss.NewStyle().Foreground(trail[(blk+frame)%n])
 		b.WriteString(s.Render(strings.Repeat("━", segEnd-start)))
 	}
-	b.WriteString(selectedStyle.Render(cat)) // accent-pink cat
+	b.WriteString(catStyle.Render(cat)) // brand-magenta cat (kept off the selection blue)
 	// Faint track ahead of the cat shows how far is left.
 	if right := width - catX - catW; right > 0 {
 		b.WriteString(borderStyle.Render(strings.Repeat("─", right)))
