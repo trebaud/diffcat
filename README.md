@@ -18,10 +18,10 @@
 ## Features
 
 - TUI with vim native keybindings
-- Collapsible file tree with per-folder roll-up stats
-- GitHub-style diffs: green/red tints, line-number gutters, syntax highlighting
-- Diffs against the **merge base**, so you see what your branch added rather than what later landed on it
-- Includes staged, unstaged, and untracked files
+- GitHub-style diffs: green/red tints, line-number gutters, syntax highlighting, surrounding lines expansion
+- Unified or side-by-side view (`s`), light/dark theme (`t`)
+- Diffs against main/master or a specified merge base by default
+- Commit history view
 
 ## Install
 

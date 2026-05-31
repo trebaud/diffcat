@@ -22,22 +22,6 @@ ok()    { printf "${GREEN}[+]${RESET} %s\n" "$*"; }
 warn()  { printf "${YELLOW}[!]${RESET} %s\n" "$*"; }
 fail()  { printf "${RED}[x]${RESET} %s\n" "$*"; exit 1; }
 
-header() {
-  echo ""
-  printf "${BOLD}${CYAN}"
-  cat << 'ART'
-   _ _  __  __                          _
-  | (_)/ _|/ _|      _ __ ___   __ _ ___| |_ ___ _ __
-  | | | |_| |_ _____| '_ ` _ \ / _` / __| __/ _ \ '__|
-  | | |  _|  _|_____| | | | | | (_| \__ \ ||  __/ |
-  |_|_|_| |_|       |_| |_| |_|\__,_|___/\__\___|_|
-
-ART
-  printf "${RESET}"
-  printf "${DIM}  Review your branch's diff against master in the terminal${RESET}\n"
-  echo ""
-}
-
 # -------------------------------------------------------------------
 # System checks
 # -------------------------------------------------------------------
@@ -122,7 +106,6 @@ install_binary() {
 # Main
 # -------------------------------------------------------------------
 
-header
 info "Starting installation..."
 echo ""
 
