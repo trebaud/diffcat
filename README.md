@@ -20,14 +20,13 @@
 - TUI with vim native keybindings
 - Collapsible file tree with per-folder roll-up stats
 - GitHub-style diffs: green/red tints, line-number gutters, syntax highlighting
-- Unified or side-by-side view (`s`), light/dark theme (`t`)
 - Diffs against the **merge base**, so you see what your branch added rather than what later landed on it
 - Includes staged, unstaged, and untracked files
 
 ## Install
 
 ```bash
-go install github.com/trebaud/diffcat/cmd/diffcat@latest   # needs $(go env GOPATH)/bin on $PATH
+go install github.com/trebaud/diffcat/cmd/diffcat@latest
 ```
 
 From source:
