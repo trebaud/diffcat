@@ -26,6 +26,7 @@ index 1111111..2222222 100644
 
 func sampleModel() model {
 	m := model{
+		sidebar:       sidebarNormal,
 		baseName:      "master",
 		baseIsDefault: true,
 		branch:        "feature/long-branch-name",
@@ -139,7 +140,16 @@ func TestRenderNoWrap(t *testing.T) {
 	finding := sampleModel()
 	finding.fileFindActive = true
 	finding.fileFindInput = "view"
-	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewEmpty, searched, searchPrompt, finding} {
+	// Sidebar collapse/expand states: the file view with the sidebar hidden (diff
+	// fills the width) and the history view widened (commit rows grow author/date/
+	// tag columns, including a tagged commit).
+	hiddenSidebar := sampleModel()
+	hiddenSidebar.sidebar = sidebarHidden
+	hiddenSidebar.focus = focusDiff
+	wideLog := logSampleModel()
+	wideLog.sidebar = sidebarWide
+	wideLog.commits[0].Tags = []string{"v1.2.0", "v1.1.0"}
+	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewEmpty, searched, searchPrompt, finding, hiddenSidebar, wideLog} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -161,7 +171,12 @@ func TestFullScreenFill(t *testing.T) {
 	overview := sampleModel()
 	overview.mode = viewOverview
 	overview.commits = logSampleModel().commits
-	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, commitSampleModel(), overview} {
+	hiddenSidebar := sampleModel()
+	hiddenSidebar.sidebar = sidebarHidden
+	wideLog := logSampleModel()
+	wideLog.sidebar = sidebarWide
+	wideLog.commits[0].Tags = []string{"v1.2.0"}
+	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, commitSampleModel(), overview, hiddenSidebar, wideLog} {
 		m.focus = focusDiff
 		for _, split := range []bool{false, true} {
 			m.splitView = split

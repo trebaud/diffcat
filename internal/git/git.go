@@ -96,8 +96,8 @@ func BaseRef(repo, base string) string {
 
 // Commit is one commit's metadata for the history view. Short is the abbreviated
 // SHA, Date is the author date (YYYY-MM-DD), Body is the commit message after the
-// subject (may be empty), and Parents lists parent SHAs — more than one means a
-// merge commit.
+// subject (may be empty), Parents lists parent SHAs — more than one means a
+// merge commit — and Tags are the git tags pointing at this commit (if any).
 type Commit struct {
 	SHA         string
 	Short       string
@@ -107,6 +107,7 @@ type Commit struct {
 	Subject     string
 	Body        string
 	Parents     []string
+	Tags        []string
 }
 
 // IsMerge reports whether the commit has more than one parent.
@@ -131,8 +132,10 @@ func Commits(repo, base string) ([]Commit, error) {
 func commitLog(repo, revRange string) ([]Commit, error) {
 	// Unit/record separators (US 0x1f / RS 0x1e) frame the fields so subjects
 	// with spaces or punctuation parse unambiguously. The body (%b) is last so
-	// its embedded newlines can't be mistaken for a field separator.
-	const format = "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%ad%x1f%P%x1f%s%x1f%b%x1e"
+	// its embedded newlines can't be mistaken for a field separator. %D carries
+	// the ref decoration (branches/tags) — the ref-name placeholders populate
+	// regardless of --decorate, so tags resolve without an extra git call.
+	const format = "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%ad%x1f%P%x1f%D%x1f%s%x1f%b%x1e"
 	out, err := exec.Command("git", "-C", repo, "log", "--no-color", "--date=short", format, revRange).Output()
 	if err != nil {
 		return nil, fmt.Errorf("git log failed: %w", err)
@@ -150,7 +153,7 @@ func parseCommits(data []byte) []Commit {
 			continue
 		}
 		f := strings.Split(rec, "\x1f")
-		if len(f) < 7 {
+		if len(f) < 8 {
 			continue
 		}
 		var parents []string
@@ -158,8 +161,8 @@ func parseCommits(data []byte) []Commit {
 			parents = strings.Fields(p)
 		}
 		body := ""
-		if len(f) > 7 {
-			body = strings.Trim(f[7], "\n")
+		if len(f) > 8 {
+			body = strings.Trim(f[8], "\n")
 		}
 		commits = append(commits, Commit{
 			SHA:         f[0],
@@ -168,11 +171,26 @@ func parseCommits(data []byte) []Commit {
 			AuthorEmail: f[3],
 			Date:        f[4],
 			Parents:     parents,
-			Subject:     f[6],
+			Tags:        parseTags(f[6]),
+			Subject:     f[7],
 			Body:        body,
 		})
 	}
 	return commits
+}
+
+// parseTags pulls the tag names out of a `%D` ref decoration. The decoration is a
+// comma-separated list like "HEAD -> main, origin/main, tag: v1.2.0, tag: v1.1.0";
+// each tag entry is prefixed "tag: ". Pure, so it can be tested without a repo.
+func parseTags(decoration string) []string {
+	var tags []string
+	for _, ref := range strings.Split(decoration, ",") {
+		ref = strings.TrimSpace(ref)
+		if name := strings.TrimPrefix(ref, "tag: "); name != ref && name != "" {
+			tags = append(tags, name)
+		}
+	}
+	return tags
 }
 
 // CommitDiff returns the patch a single commit introduced, ready for diff.Parse.

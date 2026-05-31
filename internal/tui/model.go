@@ -31,14 +31,26 @@ const (
 	viewOverview                 // full-screen branch summary (churn bars + languages)
 )
 
+// sidebarSize controls how wide the left pane is, cycled with `[` / `]`.
+// sidebarHidden collapses it entirely for a full-width diff; sidebarWide opens it
+// up so the history list can show author/date/tags alongside each commit.
+type sidebarSize int
+
+const (
+	sidebarHidden sidebarSize = iota // collapsed — diff fills the whole width
+	sidebarNormal                    // default proportional split (~35%, capped)
+	sidebarWide                      // widened — room for extra commit metadata
+)
+
 // model is the Elm-architecture state for the diff viewer. The left pane lists
 // changed files; the right pane shows the selected file's diff. Diff scrolling
 // is tracked manually via diffOffset rather than a viewport component, matching
 // the rest of the rendering which is hand-laid-out.
 type model struct {
-	mode     viewMode  // viewBranch (file/diff) or viewLog (history)
-	focus    focusPane // pane that j/k/gg/G operate on
-	pendingG bool      // first half of the `gg` chord was pressed
+	mode     viewMode    // viewBranch (file/diff) or viewLog (history)
+	focus    focusPane   // pane that j/k/gg/G operate on
+	sidebar  sidebarSize // left-pane width: hidden / normal / wide (`[` / `]`)
+	pendingG bool        // first half of the `gg` chord was pressed
 
 	repo          string
 	base          string // ref the diff is computed against (merge base of master/HEAD)
@@ -164,6 +176,7 @@ type model struct {
 
 func newModel(repo, base, baseName string, baseIsDefault bool, branch string, files []git.FileChange, shortstat string, dark bool) model {
 	m := model{
+		sidebar:         sidebarNormal,
 		repo:            repo,
 		base:            base,
 		baseName:        baseName,
@@ -427,6 +440,39 @@ func (m model) diffViewportHeight() int {
 // listViewportHeight is the number of file rows visible in the left pane.
 func (m model) listViewportHeight() int {
 	return m.diffViewportHeight()
+}
+
+// sidebarWidth is the left pane's column count for the current sidebar size. It
+// returns 0 when collapsed (the diff then fills the whole width). The wide size
+// trades the diff some room for the commit list's extra metadata, but is clamped
+// so the diff never drops below a readable minimum.
+func (m model) sidebarWidth() int {
+	switch m.sidebar {
+	case sidebarHidden:
+		return 0
+	case sidebarWide:
+		w := m.width * 55 / 100
+		if w > 72 {
+			w = 72
+		}
+		// Always leave the diff at least ~28 cols.
+		if maxW := m.width - 1 - 28; w > maxW {
+			w = maxW
+		}
+		if w < 22 {
+			w = 22
+		}
+		return w
+	default:
+		w := m.width * 35 / 100
+		if w > 40 {
+			w = 40
+		}
+		if w < 22 {
+			w = 22
+		}
+		return w
+	}
 }
 
 func (m *model) clampDiffOffset() {

@@ -3,17 +3,18 @@ package git
 import "testing"
 
 // record builds one `git log` record in the separator-framed format Commits asks
-// for: fields joined by US (0x1f), terminated by RS (0x1e). Body is last so its
-// newlines stay clear of the field separators.
-func record(sha, short, author, email, date, parents, subject, body string) string {
-	return sha + "\x1f" + short + "\x1f" + author + "\x1f" + email + "\x1f" + date + "\x1f" + parents + "\x1f" + subject + "\x1f" + body + "\x1e"
+// for: fields joined by US (0x1f), terminated by RS (0x1e). The %D decoration
+// field carries ref names (branches/tags); body is last so its newlines stay
+// clear of the field separators.
+func record(sha, short, author, email, date, parents, decoration, subject, body string) string {
+	return sha + "\x1f" + short + "\x1f" + author + "\x1f" + email + "\x1f" + date + "\x1f" + parents + "\x1f" + decoration + "\x1f" + subject + "\x1f" + body + "\x1e"
 }
 
 func TestParseCommits(t *testing.T) {
 	// git emits each record followed by a newline; the last one may lack it.
-	blob := record("aaa111full", "aaa111", "Ada Lovelace", "ada@example.io", "2026-05-29", "bbb222full", "Tighten README for end users", "Explain the why.\n\nSecond paragraph of the body.") + "\n" +
-		record("ccc333full", "ccc333", "Grace Hopper", "grace@example.io", "2026-05-28", "ddd444 eee555", "Merge branch 'x' into main", "") + "\n" +
-		record("fff666full", "fff666", "Alan Turing", "alan@example.io", "2026-05-27", "", "Root commit, no parent", "")
+	blob := record("aaa111full", "aaa111", "Ada Lovelace", "ada@example.io", "2026-05-29", "bbb222full", "HEAD -> main, tag: v1.2.0, tag: v1.1.0", "Tighten README for end users", "Explain the why.\n\nSecond paragraph of the body.") + "\n" +
+		record("ccc333full", "ccc333", "Grace Hopper", "grace@example.io", "2026-05-28", "ddd444 eee555", "", "Merge branch 'x' into main", "") + "\n" +
+		record("fff666full", "fff666", "Alan Turing", "alan@example.io", "2026-05-27", "", "", "Root commit, no parent", "")
 
 	got := parseCommits([]byte(blob))
 	if len(got) != 3 {
@@ -45,6 +46,20 @@ func TestParseCommits(t *testing.T) {
 
 	if len(got[2].Parents) != 0 || got[2].IsMerge() {
 		t.Errorf("root commit should have no parents, got %v", got[2].Parents)
+	}
+
+	// The decoration's "tag: " entries become Tags, in order; branches are ignored.
+	if want := []string{"v1.2.0", "v1.1.0"}; len(got[0].Tags) != len(want) {
+		t.Errorf("commit 0 tags = %v, want %v", got[0].Tags, want)
+	} else {
+		for i := range want {
+			if got[0].Tags[i] != want[i] {
+				t.Errorf("commit 0 tag[%d] = %q, want %q", i, got[0].Tags[i], want[i])
+			}
+		}
+	}
+	if len(got[1].Tags) != 0 {
+		t.Errorf("commit 1 should have no tags, got %v", got[1].Tags)
 	}
 }
 

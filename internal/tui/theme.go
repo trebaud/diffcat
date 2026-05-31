@@ -57,6 +57,7 @@ var (
 
 	branchStyle    lipgloss.Style // the current branch name in the header
 	baseBadgeStyle lipgloss.Style // the base branch, as a colored pill in the header
+	tagStyle       lipgloss.Style // git tags in the commit details / history list
 
 	catStyle lipgloss.Style // the nyan cat — brand magenta, kept off the selection blue
 
@@ -197,6 +198,10 @@ func ApplyTheme(isDark bool) {
 	// against. The pill degrades to a visible block in 16-color terminals.
 	branchStyle = lipgloss.NewStyle().Bold(true)
 	baseBadgeStyle = lipgloss.NewStyle().Background(hunkBg).Foreground(hunkFg).Bold(true)
+
+	// Git tags read in a subtle gold — git's own decoration color for tags, kept
+	// muted (not bold) so they sit quietly beside the brighter subject/SHA.
+	tagStyle = lipgloss.NewStyle().Foreground(ld(lipgloss.Color("#9a6700"), lipgloss.Color("#d4a72c")))
 
 	// The number/marker gutter rides the brighter gutter band; the code body uses
 	// diffAddBg/diffDelBg (the deeper body band) in renderCode.

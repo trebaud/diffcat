@@ -51,16 +51,14 @@ func (m model) render() string {
 		return screen
 	}
 
-	// Proportional split with a cap: the file list takes ~35% but never grows
-	// past 40 cols (lists don't benefit from more) nor shrinks below 22.
-	listWidth := m.width * 35 / 100
-	if listWidth > 40 {
-		listWidth = 40
+	// The sidebar width is driven by the `[`/`]` collapse-expand state. When it's
+	// 0 the sidebar is collapsed and the diff fills the whole width; otherwise the
+	// diff takes the remainder past the list and the one-column divider.
+	listWidth := m.sidebarWidth()
+	diffWidth := m.width
+	if listWidth > 0 {
+		diffWidth = m.width - listWidth - 1
 	}
-	if listWidth < 22 {
-		listWidth = 22
-	}
-	diffWidth := m.width - listWidth - 1
 
 	// The body fills everything between the one-line header and footer. We pin
 	// both panes and the divider to that exact height so the TUI occupies the
@@ -72,15 +70,26 @@ func (m model) render() string {
 	}
 	fill := lipgloss.NewStyle().Height(bodyHeight).MaxHeight(bodyHeight)
 
-	var left, right string
+	var right string
 	if m.mode == viewLog {
-		left = fill.Render(m.commitListView(listWidth))
 		right = fill.Render(m.commitDiffView(diffWidth))
 	} else {
-		left = fill.Render(m.listView(listWidth))
 		right = fill.Render(m.diffView(diffWidth))
 	}
-	body := lipgloss.JoinHorizontal(lipgloss.Top, left, m.divider(bodyHeight), right)
+
+	var body string
+	if listWidth == 0 {
+		// Sidebar collapsed: the diff pane is the entire body.
+		body = right
+	} else {
+		var left string
+		if m.mode == viewLog {
+			left = fill.Render(m.commitListView(listWidth))
+		} else {
+			left = fill.Render(m.listView(listWidth))
+		}
+		body = lipgloss.JoinHorizontal(lipgloss.Top, left, m.divider(bodyHeight), right)
+	}
 
 	// The chrome rows span the full width: truncate (never wrap) then pad.
 	header := padLine(m.headerView(), m.width)
@@ -350,6 +359,9 @@ func (m model) commitRow(c git.Commit, selected bool, width int) string {
 	if c.IsMerge() {
 		glyph = "◆"
 	}
+	if m.sidebar == sidebarWide {
+		return m.commitRowWide(c, glyph, selected, width)
+	}
 	head := glyph + " " + c.Short + " "
 	avail := width - lipgloss.Width(head)
 	if avail < 3 {
@@ -366,6 +378,64 @@ func (m model) commitRow(c git.Commit, selected bool, width int) string {
 		glyphStyle = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
 	}
 	return glyphStyle.Render(glyph) + " " + metaStyle.Render(c.Short) + " " + subj
+}
+
+// commitRowWide renders one commit line for the widened sidebar: the same node
+// glyph + short SHA + subject, plus a subtle gold tag badge after the SHA and the
+// author/date right-aligned. The right metadata is dropped first when a row gets
+// too narrow to keep the subject legible. Like commitRow it lays out plain text
+// for exact alignment, then colorizes per segment (the selected row is one bar).
+func (m model) commitRowWide(c git.Commit, glyph string, selected bool, width int) string {
+	head := glyph + " " + c.Short + "  "
+
+	tagPart := ""
+	if len(c.Tags) > 0 {
+		tagPart = strings.Join(c.Tags, " ") + "  "
+	}
+
+	meta := truncateText(c.Author, 16) + "  " + c.Date
+
+	fixed := lipgloss.Width(head) + lipgloss.Width(tagPart)
+	subjAvail := width - fixed - lipgloss.Width(meta) - 2
+	if subjAvail < 12 {
+		// Too cramped for the right metadata — give the room back to the subject.
+		meta = ""
+		subjAvail = width - fixed - 1
+	}
+	if subjAvail < 3 {
+		subjAvail = 3
+	}
+	subj := truncateText(c.Subject, subjAvail)
+
+	gap := width - fixed - lipgloss.Width(subj) - lipgloss.Width(meta)
+	if gap < 1 {
+		gap = 1
+	}
+
+	if selected {
+		row := head + tagPart + subj + strings.Repeat(" ", gap) + meta
+		return selectedRowStyle.Width(width).Render(row)
+	}
+
+	glyphStyle := titleStyle
+	if c.IsMerge() {
+		glyphStyle = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
+	}
+	var b strings.Builder
+	b.WriteString(glyphStyle.Render(glyph))
+	b.WriteString(" ")
+	b.WriteString(metaStyle.Render(c.Short))
+	b.WriteString("  ")
+	if tagPart != "" {
+		b.WriteString(tagStyle.Render(strings.TrimRight(tagPart, " ")))
+		b.WriteString("  ")
+	}
+	b.WriteString(subj)
+	b.WriteString(strings.Repeat(" ", gap))
+	if meta != "" {
+		b.WriteString(mutedStyle.Render(meta))
+	}
+	return b.String()
 }
 
 // treeRow renders one line of the file tree — a folder ("▾ internal/tui  +42 -7")
@@ -958,15 +1028,15 @@ func (m model) footerView() string {
 		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewLog:
 		keys = []string{
-			"j/k select", "h/l ⇄ pane", "↵ open", "d details", "gg/G top/bot", "s split", "t theme", "L/esc back", "? help", "q quit",
+			"j/k select", "h/l ⇄ pane", "↵ open", "d details", "[ ] sidebar", "s split", "t theme", "L/esc back", "? help", "q quit",
 		}
 	case viewCommit:
 		keys = []string{
-			"j/k move", "h/l ⇄ pane", "↵ open/fold", "f find", "/ search", "d details", "s split", "t theme", "esc back", "? help", "q quit",
+			"j/k move", "h/l ⇄ pane", "↵ open/fold", "f find", "/ search", "d details", "[ ] sidebar", "s split", "t theme", "esc back", "? help", "q quit",
 		}
 	default:
 		keys = []string{
-			"j/k move", "h/l ⇄ pane", "↵ open/fold/expand", "f find", "/ search", "S overview", "s split", "t theme", "L history", "? help", "q quit",
+			"j/k move", "h/l ⇄ pane", "↵ open/fold/expand", "f find", "/ search", "[ ] sidebar", "S overview", "s split", "t theme", "L history", "? help", "q quit",
 		}
 	}
 	footer := mutedStyle.Render(strings.Join(keys, "  ·  "))
@@ -993,6 +1063,7 @@ func (m model) helpBox() string {
 		"  Tab          toggle focused pane",
 		"  Enter / o    open file's diff / fold a folder / expand context",
 		"  f            fuzzy-jump to a changed file by name",
+		"  [ / ]        collapse / widen the sidebar (full-width diff ↔ wide list)",
 		"",
 		headingStyle.Render("  motions (act on the focused pane)"),
 		"  j / k        move cursor down / up one line",
@@ -1070,6 +1141,9 @@ func (m model) detailsContent() []string {
 		"",
 		mutedStyle.Render("Author  ") + truncateText(author, w-8),
 		mutedStyle.Render("Date    ") + truncateText(c.Date, w-8),
+	}
+	if len(c.Tags) > 0 {
+		lines = append(lines, mutedStyle.Render("Tags    ")+tagStyle.Render(truncateText(strings.Join(c.Tags, ", "), w-8)))
 	}
 	if len(c.Parents) > 0 {
 		parents := strings.Join(c.Parents, "  ")

@@ -27,7 +27,9 @@ auto-detected base branch.
   the diff endpoint: a branch goes through the merge base, but a raw commit/tag
   is used verbatim so `--base <sha>` compares against exactly that commit.
   `Commits` lists the branch's history (`base..HEAD`, newest first, with parent
-  SHAs for merge detection) via a separator-framed `git log` parsed by the pure
+  SHAs for merge detection and any git `Tags` pointing at each commit, parsed from
+  the `%D` ref decoration by the pure `parseTags`) via a separator-framed `git log`
+  parsed by the pure
   `parseCommits` — and falls back to HEAD's full history when that range is empty
   (e.g. sitting on the default branch); `CommitDiff` returns one commit's patch
   (`git show --format=`). `CommitFiles`/`CommitFileDiff` are the per-commit
@@ -126,7 +128,15 @@ auto-detected base branch.
   - Layout is responsive: proportional list/diff split (list capped at 40 cols),
     a minimum-size gate (`minWidth`/`minHeight` in `view.go`), and all chrome is
     width-clamped so nothing wraps. `render_smoke_test.go` guards the no-wrap
-    invariant — every rendered line must be ≤ terminal width.
+    invariant — every rendered line must be ≤ terminal width. The left pane's
+    width is a tri-state `sidebar` (`sidebarHidden`/`sidebarNormal`/`sidebarWide`
+    in `model.go`) cycled with `[` (narrow) / `]` (widen): `sidebarWidth()` returns
+    0 when hidden (the diff fills the whole width, no divider, focus forced to the
+    diff), the normal ~35%/40-cap split, or a ~55%/72-cap wide list that still
+    leaves the diff ≥28 cols. In `viewLog` a wide sidebar switches `commitRow` to
+    `commitRowWide`, which adds the author/date right-aligned and a subtle-gold tag
+    badge (`tagStyle`) after the SHA, dropping the right metadata first when the
+    row gets too narrow.
   - `nyanBar` (view.go) pins a nyan-cat scroll-progress indicator to the bottom
     of the diff pane: position = scroll fraction, rainbow trail behind. A
     `tickMsg` loop (~7fps, `update.go`) wiggles the cat's face — the main idle

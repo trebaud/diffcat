@@ -248,6 +248,25 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.toggleTheme()
 		return m, nil
 
+	// --- sidebar collapse / expand (`[` narrows toward hidden, `]` widens) ---
+	case "]":
+		// Widen the sidebar: hidden → normal → wide. A wide sidebar surfaces extra
+		// commit metadata (author, date, tags) in the history list.
+		if m.mode != viewOverview && m.sidebar < sidebarWide {
+			m.sidebar++
+		}
+		return m, nil
+	case "[":
+		// Narrow the sidebar: wide → normal → hidden. Collapsing fully hands the
+		// whole width to the diff, so move focus there since the list is gone.
+		if m.mode != viewOverview && m.sidebar > sidebarHidden {
+			m.sidebar--
+			if m.sidebar == sidebarHidden {
+				m.focus = focusDiff
+			}
+		}
+		return m, nil
+
 	// --- diff search (`/` to enter a query, n/N to step through matches) ---
 	case "/":
 		// Only meaningful where a diff is showing; harmless (an empty prompt) on a
