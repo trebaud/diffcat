@@ -95,15 +95,18 @@ func BaseRef(repo, base string) string {
 }
 
 // Commit is one commit's metadata for the history view. Short is the abbreviated
-// SHA, Date is the author date (YYYY-MM-DD), and Parents lists parent SHAs —
-// more than one means a merge commit.
+// SHA, Date is the author date (YYYY-MM-DD), Body is the commit message after the
+// subject (may be empty), and Parents lists parent SHAs — more than one means a
+// merge commit.
 type Commit struct {
-	SHA     string
-	Short   string
-	Author  string
-	Date    string
-	Subject string
-	Parents []string
+	SHA         string
+	Short       string
+	Author      string
+	AuthorEmail string
+	Date        string
+	Subject     string
+	Body        string
+	Parents     []string
 }
 
 // IsMerge reports whether the commit has more than one parent.
@@ -127,8 +130,9 @@ func Commits(repo, base string) ([]Commit, error) {
 // commitLog runs `git log` over revRange and parses the result.
 func commitLog(repo, revRange string) ([]Commit, error) {
 	// Unit/record separators (US 0x1f / RS 0x1e) frame the fields so subjects
-	// with spaces or punctuation parse unambiguously.
-	const format = "--pretty=format:%H%x1f%h%x1f%an%x1f%ad%x1f%P%x1f%s%x1e"
+	// with spaces or punctuation parse unambiguously. The body (%b) is last so
+	// its embedded newlines can't be mistaken for a field separator.
+	const format = "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%ad%x1f%P%x1f%s%x1f%b%x1e"
 	out, err := exec.Command("git", "-C", repo, "log", "--no-color", "--date=short", format, revRange).Output()
 	if err != nil {
 		return nil, fmt.Errorf("git log failed: %w", err)
@@ -146,20 +150,26 @@ func parseCommits(data []byte) []Commit {
 			continue
 		}
 		f := strings.Split(rec, "\x1f")
-		if len(f) < 6 {
+		if len(f) < 7 {
 			continue
 		}
 		var parents []string
-		if p := strings.TrimSpace(f[4]); p != "" {
+		if p := strings.TrimSpace(f[5]); p != "" {
 			parents = strings.Fields(p)
 		}
+		body := ""
+		if len(f) > 7 {
+			body = strings.Trim(f[7], "\n")
+		}
 		commits = append(commits, Commit{
-			SHA:     f[0],
-			Short:   f[1],
-			Author:  f[2],
-			Date:    f[3],
-			Parents: parents,
-			Subject: f[5],
+			SHA:         f[0],
+			Short:       f[1],
+			Author:      f[2],
+			AuthorEmail: f[3],
+			Date:        f[4],
+			Parents:     parents,
+			Subject:     f[6],
+			Body:        body,
 		})
 	}
 	return commits

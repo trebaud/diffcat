@@ -74,6 +74,34 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.showCommitDetails {
+		// j/k (and half/full page) scroll a long body; any other key dismisses.
+		switch msg.String() {
+		case "j", "down":
+			m.detailsScroll++
+		case "k", "up":
+			m.detailsScroll--
+		case "ctrl+d", "ctrl+f":
+			m.detailsScroll += m.diffViewportHeight() / 2
+		case "ctrl+u", "ctrl+b":
+			m.detailsScroll -= m.diffViewportHeight() / 2
+		default:
+			m.showCommitDetails = false
+			m.detailsScroll = 0
+			m.pendingG = false
+			return m, nil
+		}
+		// Clamp to the scrollable range so j past the end / k past the top stick.
+		if max := m.detailsMaxScroll(); m.detailsScroll > max {
+			m.detailsScroll = max
+		}
+		if m.detailsScroll < 0 {
+			m.detailsScroll = 0
+		}
+		m.pendingG = false
+		return m, nil
+	}
+
 	key := msg.String()
 
 	// `gg` chord: a pending `g` followed by another `g` jumps to the top of
@@ -118,6 +146,16 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "?":
 		m.showHelp = true
+		return m, nil
+
+	case "d":
+		// Inspect the in-scope commit's details. Only meaningful where a real
+		// commit is in scope: the highlighted commit in the history list (not the
+		// working-tree row) or the commit being drilled into.
+		if m.detailsCommit() != nil {
+			m.showCommitDetails = true
+			m.detailsScroll = 0
+		}
 		return m, nil
 
 	case "r":

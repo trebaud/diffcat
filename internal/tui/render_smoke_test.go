@@ -114,7 +114,15 @@ func TestRenderNoWrap(t *testing.T) {
 		shimmer.unseen[f.Path] = true
 	}
 	shimmer.animFrame = 5 // a mid-cycle frame so the sparkle/wave is actually styled
-	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer} {
+	// The commit-details modal over a commit with a long email and a multi-line
+	// body that must word-wrap rather than overflow the box.
+	details := logSampleModel()
+	details.commits[0].AuthorEmail = "ada.lovelace.with.a.very.long.email.address@example-domain.io"
+	details.commits[0].Body = "This commit message body is intentionally quite long and contains a supercalifragilisticexpialidociousunbreakableword to exercise the hard-break path.\n\nA second paragraph follows the blank line and keeps going past the bottom of a short terminal so the scroll window is exercised too."
+	details.showCommitDetails = true
+	detailsScrolled := details
+	detailsScrolled.detailsScroll = 99 // past the end → clamps
+	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -148,6 +156,41 @@ func TestFullScreenFill(t *testing.T) {
 						t.Errorf("mode=%d split=%v %dx%d line %d width %d, want %d", m.mode, split, sz[0], sz[1], i, w, sz[0])
 					}
 				}
+			}
+		}
+	}
+}
+
+// TestOverlayFloats checks that a floating overlay (help, commit details) fills
+// the screen exactly and keeps the background visible behind it (it composites a
+// dimmed scrim rather than replacing the screen), at a range of sizes.
+func TestOverlayFloats(t *testing.T) {
+	help := sampleModel()
+	help.showHelp = true
+
+	details := logSampleModel()
+	details.commits[0].Body = "A body paragraph that explains the change in enough words to span a couple of lines inside the floating window."
+	details.showCommitDetails = true
+
+	for _, m := range []model{help, details} {
+		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 24}, {80, 20}, {60, 14}} {
+			m.width, m.height = sz[0], sz[1]
+			out := m.render()
+			lines := strings.Split(out, "\n")
+			if len(lines) != sz[1] {
+				t.Errorf("showHelp=%v %dx%d: %d lines, want %d", m.showHelp, sz[0], sz[1], len(lines), sz[1])
+			}
+			for i, line := range lines {
+				if w := lipgloss.Width(line); w > sz[0] {
+					t.Errorf("showHelp=%v %dx%d line %d width %d exceeds %d", m.showHelp, sz[0], sz[1], i, w, sz[0])
+				}
+			}
+			// With ample margin the box can't cover the whole screen, so the
+			// background header must survive behind the scrim — proof the overlay
+			// floats instead of replacing the screen. (At tiny sizes the box
+			// legitimately fills everything, so only assert this when there's room.)
+			if sz[0] >= 120 && sz[1] >= 40 && !strings.Contains(out, "diffcat") {
+				t.Errorf("showHelp=%v %dx%d: background 'diffcat' header missing — overlay replaced the screen", m.showHelp, sz[0], sz[1])
 			}
 		}
 	}

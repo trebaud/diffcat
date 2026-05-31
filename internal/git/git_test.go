@@ -3,16 +3,17 @@ package git
 import "testing"
 
 // record builds one `git log` record in the separator-framed format Commits asks
-// for: fields joined by US (0x1f), terminated by RS (0x1e).
-func record(sha, short, author, date, parents, subject string) string {
-	return sha + "\x1f" + short + "\x1f" + author + "\x1f" + date + "\x1f" + parents + "\x1f" + subject + "\x1e"
+// for: fields joined by US (0x1f), terminated by RS (0x1e). Body is last so its
+// newlines stay clear of the field separators.
+func record(sha, short, author, email, date, parents, subject, body string) string {
+	return sha + "\x1f" + short + "\x1f" + author + "\x1f" + email + "\x1f" + date + "\x1f" + parents + "\x1f" + subject + "\x1f" + body + "\x1e"
 }
 
 func TestParseCommits(t *testing.T) {
 	// git emits each record followed by a newline; the last one may lack it.
-	blob := record("aaa111full", "aaa111", "Ada Lovelace", "2026-05-29", "bbb222full", "Tighten README for end users") + "\n" +
-		record("ccc333full", "ccc333", "Grace Hopper", "2026-05-28", "ddd444 eee555", "Merge branch 'x' into main") + "\n" +
-		record("fff666full", "fff666", "Alan Turing", "2026-05-27", "", "Root commit, no parent")
+	blob := record("aaa111full", "aaa111", "Ada Lovelace", "ada@example.io", "2026-05-29", "bbb222full", "Tighten README for end users", "Explain the why.\n\nSecond paragraph of the body.") + "\n" +
+		record("ccc333full", "ccc333", "Grace Hopper", "grace@example.io", "2026-05-28", "ddd444 eee555", "Merge branch 'x' into main", "") + "\n" +
+		record("fff666full", "fff666", "Alan Turing", "alan@example.io", "2026-05-27", "", "Root commit, no parent", "")
 
 	got := parseCommits([]byte(blob))
 	if len(got) != 3 {
@@ -25,8 +26,14 @@ func TestParseCommits(t *testing.T) {
 	if got[0].Subject != "Tighten README for end users" {
 		t.Errorf("commit 0 subject with spaces mangled: %q", got[0].Subject)
 	}
-	if got[0].Author != "Ada Lovelace" || got[0].Date != "2026-05-29" {
-		t.Errorf("commit 0 author/date = %q/%q", got[0].Author, got[0].Date)
+	if got[0].Author != "Ada Lovelace" || got[0].AuthorEmail != "ada@example.io" || got[0].Date != "2026-05-29" {
+		t.Errorf("commit 0 author/email/date = %q/%q/%q", got[0].Author, got[0].AuthorEmail, got[0].Date)
+	}
+	if got[0].Body != "Explain the why.\n\nSecond paragraph of the body." {
+		t.Errorf("commit 0 multi-line body mangled: %q", got[0].Body)
+	}
+	if got[1].Body != "" {
+		t.Errorf("commit 1 should have empty body, got %q", got[1].Body)
 	}
 	if len(got[0].Parents) != 1 || got[0].IsMerge() {
 		t.Errorf("commit 0 should have one parent, got %v", got[0].Parents)

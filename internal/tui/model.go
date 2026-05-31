@@ -132,7 +132,13 @@ type model struct {
 	syncFingerprint string
 
 	showHelp bool
-	err      error
+
+	// showCommitDetails toggles the commit-details modal (author, date, full
+	// message body) for the in-scope commit; detailsScroll windows a long body.
+	showCommitDetails bool
+	detailsScroll     int
+
+	err error
 }
 
 func newModel(repo, base, baseName string, baseIsDefault bool, branch string, files []git.FileChange, shortstat string, dark bool) model {

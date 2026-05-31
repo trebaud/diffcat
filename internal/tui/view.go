@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	uv "github.com/charmbracelet/ultraviolet"
 
 	"github.com/alecthomas/chroma/v2"
 
@@ -39,9 +40,6 @@ func (m model) render() string {
 	}
 	if m.width < minWidth || m.height < minHeight {
 		return m.tooSmallView()
-	}
-	if m.showHelp {
-		return m.helpView()
 	}
 
 	// Proportional split with a cap: the file list takes ~35% but never grows
@@ -78,7 +76,73 @@ func (m model) render() string {
 	// The chrome rows span the full width: truncate (never wrap) then pad.
 	header := padLine(m.headerView(), m.width)
 	footer := padLine(m.footerView(), m.width)
-	return strings.Join([]string{header, body, footer}, "\n")
+	screen := strings.Join([]string{header, body, footer}, "\n")
+
+	// Overlays float above the dimmed screen rather than replacing it, so the
+	// reader keeps their place in the background.
+	if m.showHelp {
+		return m.floatOverlay(screen, m.helpBox())
+	}
+	if m.showCommitDetails {
+		return m.floatOverlay(screen, m.commitDetailsBox())
+	}
+	return screen
+}
+
+// floatOverlay composites box as a floating window centered over screen: the
+// background is dimmed to a subtle scrim, then the (solid) box is drawn on top.
+func (m model) floatOverlay(screen, box string) string {
+	canvas := lipgloss.NewCanvas(m.width, m.height)
+	canvas.Compose(lipgloss.NewLayer(screen))
+	dimCanvas(canvas)
+
+	boxW, boxH := lipgloss.Width(box), lipgloss.Height(box)
+	bx := max((m.width-boxW)/2, 0)
+	by := max((m.height-boxH)/2, 0)
+	uv.NewStyledString(box).Draw(canvas, uv.Rect(bx, by, boxW, boxH))
+	return canvas.Render()
+}
+
+// dimCanvas blends every cell toward the theme's canvas tone, fading the
+// background into a soft scrim behind a floating window. Foreground text is
+// pulled most of the way toward the scrim (so it recedes yet stays faintly
+// legible); backgrounds are nudged less so colored bands just lose their punch.
+func dimCanvas(canvas *lipgloss.Canvas) {
+	dark := colCanvas == nil
+	scrim := color.RGBA{R: 0x0d, G: 0x11, B: 0x17, A: 0xff} // github dark canvas
+	defaultFg := color.RGBA{R: 0xad, G: 0xbc, B: 0xc7, A: 0xff}
+	if !dark {
+		scrim = color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+		defaultFg = color.RGBA{R: 0x1f, G: 0x23, B: 0x28, A: 0xff}
+	}
+	w, h := canvas.Width(), canvas.Height()
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			cell := canvas.CellAt(x, y)
+			if cell == nil {
+				continue
+			}
+			fg := cell.Style.Fg
+			if fg == nil {
+				fg = defaultFg
+			}
+			cell.Style.Fg = blendColor(fg, scrim, 0.62)
+			if cell.Style.Bg != nil {
+				cell.Style.Bg = blendColor(cell.Style.Bg, scrim, 0.45)
+			}
+		}
+	}
+}
+
+// blendColor linearly interpolates from a toward b by t (0 = a, 1 = b).
+func blendColor(a, b color.Color, t float64) color.Color {
+	ar, ag, ab, _ := a.RGBA()
+	br, bg, bb, _ := b.RGBA()
+	mix := func(x, y uint32) uint8 {
+		// RGBA() returns 16-bit channels; /257 maps 0..65535 → 0..255.
+		return uint8((float64(x)*(1-t)+float64(y)*t)/257 + 0.5)
+	}
+	return color.RGBA{R: mix(ar, br), G: mix(ag, bg), B: mix(ab, bb), A: 0xff}
 }
 
 func (m model) headerView() string {
@@ -773,11 +837,11 @@ func (m model) footerView() string {
 	switch m.mode {
 	case viewLog:
 		keys = []string{
-			"j/k select", "h/l ⇄ pane", "↵ open", "gg/G top/bot", "s split", "t theme", "L/esc back", "? help", "q quit",
+			"j/k select", "h/l ⇄ pane", "↵ open", "d details", "gg/G top/bot", "s split", "t theme", "L/esc back", "? help", "q quit",
 		}
 	case viewCommit:
 		keys = []string{
-			"j/k move", "h/l ⇄ pane", "↵ open/fold", "gg/G top/bot", "s split", "t theme", "esc back", "? help", "q quit",
+			"j/k move", "h/l ⇄ pane", "↵ open/fold", "d details", "gg/G top/bot", "s split", "t theme", "esc back", "? help", "q quit",
 		}
 	default:
 		keys = []string{
@@ -787,7 +851,7 @@ func (m model) footerView() string {
 	return mutedStyle.Render(strings.Join(keys, "  ·  "))
 }
 
-func (m model) helpView() string {
+func (m model) helpBox() string {
 	lines := []string{
 		titleStyle.Render("diffcat — vim keybindings"),
 		"",
@@ -809,6 +873,7 @@ func (m model) helpView() string {
 		"  L            toggle the commit-history view",
 		"  j / k        (in history) move between entries, preview each diff",
 		"  Enter        (in history) open the commit's (or working tree's) files",
+		"  d            inspect the selected commit (author, date, full message)",
 		"  ○ local      (in history) the working tree: staged + unstaged changes",
 		"  Esc          step back: commit tree → history → branch diff",
 		"",
@@ -820,10 +885,149 @@ func (m model) helpView() string {
 		"",
 		mutedStyle.Render("  press any key to dismiss"),
 	}
-	box := lipgloss.NewStyle().
+	return floatingBox(strings.Join(lines, "\n"))
+}
+
+// floatingBox wraps content in the shared floating-window chrome: a rounded
+// border over a solid, slightly elevated panel background so it reads as a
+// window sitting above the dimmed scrim.
+func floatingBox(content string) string {
+	return lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(colBorder).
+		BorderBackground(colOverlayBg).
+		Background(colOverlayBg).
 		Padding(1, 2).
-		Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, box)
+		Render(content)
+}
+
+// detailsContentWidth is the column budget for the details modal's inner text:
+// it stays comfortably readable but never overflows narrow terminals (the box
+// adds a 1-col border + 2-col padding on each side, hence the -6).
+func (m model) detailsContentWidth() int {
+	w := m.width - 6
+	if w > 72 {
+		w = 72
+	}
+	if w < 1 {
+		w = 1
+	}
+	return w
+}
+
+// detailsContent assembles the full set of inner lines for the commit-details
+// modal (header, message, dismiss hint). The body is word-wrapped to the content
+// width so it never wraps past the terminal edge.
+func (m model) detailsContent() []string {
+	c := m.detailsCommit()
+	if c == nil {
+		return nil
+	}
+	w := m.detailsContentWidth()
+
+	author := c.Author
+	if c.AuthorEmail != "" {
+		author += " <" + c.AuthorEmail + ">"
+	}
+	lines := []string{
+		titleStyle.Render(truncateText("commit "+c.SHA, w)),
+		"",
+		mutedStyle.Render("Author  ") + truncateText(author, w-8),
+		mutedStyle.Render("Date    ") + truncateText(c.Date, w-8),
+	}
+	if len(c.Parents) > 0 {
+		parents := strings.Join(c.Parents, "  ")
+		if c.IsMerge() {
+			parents += "  (merge)"
+		}
+		lines = append(lines, mutedStyle.Render("Parents ")+truncateText(parents, w-8))
+	}
+	lines = append(lines, "")
+	for _, sl := range wrapText(c.Subject, w) {
+		lines = append(lines, headingStyle.Render(sl))
+	}
+	if strings.TrimSpace(c.Body) != "" {
+		lines = append(lines, "")
+		lines = append(lines, wrapText(c.Body, w)...)
+	}
+	lines = append(lines, "", mutedStyle.Render("j/k scroll · any other key to dismiss"))
+	return lines
+}
+
+// detailsMaxScroll is how far the modal can scroll given its content and the
+// available height — shared by the view (to window) and update (to clamp).
+func (m model) detailsMaxScroll() int {
+	rows := m.height - 4 // rounded border (2) + vertical padding (2)
+	if rows < 1 {
+		rows = 1
+	}
+	if over := len(m.detailsContent()) - rows; over > 0 {
+		return over
+	}
+	return 0
+}
+
+// commitDetailsBox builds the commit-details floating window, windowed by
+// detailsScroll when the message is taller than the screen.
+func (m model) commitDetailsBox() string {
+	content := m.detailsContent()
+	rows := m.height - 4
+	if rows < 1 {
+		rows = 1
+	}
+	off := m.detailsScroll
+	if max := m.detailsMaxScroll(); off > max {
+		off = max
+	}
+	end := off + rows
+	if end > len(content) {
+		end = len(content)
+	}
+	if off > len(content) {
+		off = len(content)
+	}
+	return floatingBox(strings.Join(content[off:end], "\n"))
+}
+
+// wrapText word-wraps s to width cols, preserving existing newlines (so blank
+// lines between paragraphs survive). Words longer than width are hard-broken.
+func wrapText(s string, width int) []string {
+	if width < 1 {
+		width = 1
+	}
+	var out []string
+	for _, para := range strings.Split(s, "\n") {
+		if para == "" {
+			out = append(out, "")
+			continue
+		}
+		line := ""
+		for _, word := range strings.Fields(para) {
+			for lipgloss.Width(word) > width {
+				// Hard-break a word too long to ever fit.
+				if line != "" {
+					out = append(out, line)
+					line = ""
+				}
+				r := []rune(word)
+				cut := len(r)
+				for cut > 0 && lipgloss.Width(string(r[:cut])) > width {
+					cut--
+				}
+				out = append(out, string(r[:cut]))
+				word = string(r[cut:])
+			}
+			switch {
+			case line == "":
+				line = word
+			case lipgloss.Width(line)+1+lipgloss.Width(word) <= width:
+				line += " " + word
+			default:
+				out = append(out, line)
+				line = word
+			}
+		}
+		out = append(out, line)
+	}
+	return out
 }

@@ -37,6 +37,11 @@ var (
 	// colors would have no light background to read against.
 	colCanvas color.Color
 	colText   color.Color
+
+	// colOverlayBg is the solid background of floating windows (help, commit
+	// details) — a slightly elevated panel tone so the window reads as sitting
+	// above the dimmed scrim behind it.
+	colOverlayBg color.Color
 )
 
 var (
@@ -101,6 +106,7 @@ func ApplyTheme(isDark bool) {
 	} else {
 		colCanvas, colText = lipgloss.Color("#ffffff"), lipgloss.Color("#1f2328")
 	}
+	colOverlayBg = ld(lipgloss.Color("#ffffff"), lipgloss.Color("#161b22"))
 
 	titleStyle = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 	catStyle = lipgloss.NewStyle().Foreground(colAccent).Bold(true)

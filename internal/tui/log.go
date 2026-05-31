@@ -47,6 +47,20 @@ func (m model) selectedCommit() *git.Commit {
 	return nil
 }
 
+// detailsCommit returns the commit the details modal should describe: the one
+// being drilled into (viewCommit) or the one highlighted in the history list
+// (viewLog). It is nil outside those modes, on the working-tree row, and while
+// drilled into the working tree — none of which is a real commit.
+func (m model) detailsCommit() *git.Commit {
+	switch m.mode {
+	case viewCommit:
+		return m.scopeCommit
+	case viewLog:
+		return m.selectedCommit()
+	}
+	return nil
+}
+
 // enterLog switches into the history view, loading the branch's commits
 // (base..HEAD) on first entry. The working tree (staged + unstaged changes) is
 // pinned as the first row when there's anything uncommitted, and the cursor
