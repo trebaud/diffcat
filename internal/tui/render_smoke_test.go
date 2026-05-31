@@ -108,7 +108,13 @@ func TestRenderNoWrap(t *testing.T) {
 	emptyWorking := commitSampleModel()
 	emptyWorking.scopeCommit, emptyWorking.scopeWorking = nil, true
 	emptyWorking.files, emptyWorking.rows = nil, nil // "no uncommitted changes" state
-	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking} {
+	shimmer := sampleModel()                         // every file flagged unseen → rainbow-shimmer tree rows
+	shimmer.unseen = map[string]bool{}
+	for _, f := range shimmer.files {
+		shimmer.unseen[f.Path] = true
+	}
+	shimmer.animFrame = 5 // a mid-cycle frame so the sparkle/wave is actually styled
+	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
