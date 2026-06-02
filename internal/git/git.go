@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -107,11 +108,41 @@ type Commit struct {
 	Subject     string
 	Body        string
 	Parents     []string
+	Heads       []string // local branches pointing here (the HEAD branch first)
+	Remotes     []string // remote-tracking refs pointing here (e.g. origin/main)
 	Tags        []string
 }
 
 // IsMerge reports whether the commit has more than one parent.
 func (c Commit) IsMerge() bool { return len(c.Parents) > 1 }
+
+// AIAgent names the AI coding agent that authored or assisted the commit (e.g.
+// "Claude", "Copilot"), or "" if it reads as human-authored. It inspects the
+// author name/email and the Co-authored-by trailers only — never the rest of the
+// message — so ordinary prose can't trip a marker (e.g. "cursor" describing the UI
+// cursor must not flag a human commit as AI). It's the single-commit counterpart
+// to the per-commit classification Authorship runs across base..HEAD, using the
+// same signals — used to label a commit-scoped overview.
+func (c Commit) AIAgent() string {
+	return aiAgent(c.Author + "\x00" + c.AuthorEmail + "\x00" + c.coAuthorTrailers())
+}
+
+// IsAIAuthored reports whether any AI agent marker is present (see AIAgent).
+func (c Commit) IsAIAuthored() bool { return c.AIAgent() != "" }
+
+// coAuthorTrailers returns the commit body's Co-authored-by trailer lines joined
+// by newlines (empty if none) — the only part of the message authorship scans, so
+// a marker in prose can't be mistaken for an agent signature.
+func (c Commit) coAuthorTrailers() string {
+	var b strings.Builder
+	for _, line := range strings.Split(c.Body, "\n") {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "co-authored-by:") {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
 
 // Commits lists the branch's history newest-first. On a feature branch it shows
 // the commits added on top of base (base..HEAD); when that range is empty — e.g.
@@ -136,16 +167,33 @@ func commitLog(repo, revRange string) ([]Commit, error) {
 	// the ref decoration (branches/tags) — the ref-name placeholders populate
 	// regardless of --decorate, so tags resolve without an extra git call.
 	const format = "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%ad%x1f%P%x1f%D%x1f%s%x1f%b%x1e"
-	out, err := exec.Command("git", "-C", repo, "log", "--no-color", "--date=short", format, revRange).Output()
+	out, err := exec.Command("git", "-C", repo, "log", "--no-color", "--date=format:%Y-%m-%d %H:%M", format, revRange).Output()
 	if err != nil {
 		return nil, fmt.Errorf("git log failed: %w", err)
 	}
-	return parseCommits(out), nil
+	return parseCommits(out, remoteNames(repo)), nil
+}
+
+// remoteNames returns the set of configured remote names (e.g. {"origin"}), used
+// to tell a remote-tracking ref like "origin/main" apart from a local branch that
+// merely contains a slash like "feature/x" — the %D decoration formats both the
+// same, so only the remote list disambiguates them. Nil on error (no repo / no
+// remotes), which simply classifies every slashed ref as a local branch.
+func remoteNames(repo string) map[string]bool {
+	out, err := exec.Command("git", "-C", repo, "remote").Output()
+	if err != nil {
+		return nil
+	}
+	names := map[string]bool{}
+	for _, n := range strings.Fields(string(out)) {
+		names[n] = true
+	}
+	return names
 }
 
 // parseCommits turns the separator-framed `git log` output into Commits. It is a
 // pure function so it can be tested without a repository.
-func parseCommits(data []byte) []Commit {
+func parseCommits(data []byte, remotes map[string]bool) []Commit {
 	var commits []Commit
 	for _, rec := range strings.Split(string(data), "\x1e") {
 		rec = strings.Trim(rec, "\n")
@@ -164,6 +212,7 @@ func parseCommits(data []byte) []Commit {
 		if len(f) > 8 {
 			body = strings.Trim(f[8], "\n")
 		}
+		heads, remoteRefs, tags := parseRefs(f[6], remotes)
 		commits = append(commits, Commit{
 			SHA:         f[0],
 			Short:       f[1],
@@ -171,7 +220,9 @@ func parseCommits(data []byte) []Commit {
 			AuthorEmail: f[3],
 			Date:        f[4],
 			Parents:     parents,
-			Tags:        parseTags(f[6]),
+			Heads:       heads,
+			Remotes:     remoteRefs,
+			Tags:        tags,
 			Subject:     f[7],
 			Body:        body,
 		})
@@ -179,18 +230,44 @@ func parseCommits(data []byte) []Commit {
 	return commits
 }
 
-// parseTags pulls the tag names out of a `%D` ref decoration. The decoration is a
-// comma-separated list like "HEAD -> main, origin/main, tag: v1.2.0, tag: v1.1.0";
-// each tag entry is prefixed "tag: ". Pure, so it can be tested without a repo.
-func parseTags(decoration string) []string {
-	var tags []string
+// parseRefs splits a `%D` ref decoration into the three kinds diffcat badges
+// separately. The decoration is a comma-separated list like
+// "HEAD -> main, origin/main, origin/HEAD, tag: v1.2.0, tag: v1.1.0":
+//   - "tag: <name>" entries become tags.
+//   - "HEAD -> <branch>" yields the branch HEAD is on; a bare "HEAD" (detached)
+//     and any other name without a slash is a local branch head. The HEAD branch
+//     lands first so callers can flag the checked-out tip.
+//   - a name whose first path segment is a configured remote (origin/main,
+//     origin/HEAD) is a remote-tracking ref. Slashes alone don't make a ref
+//     remote — local branches like feature/x carry them too — so the caller's
+//     remote set is what disambiguates.
+//
+// Pure (given the remote set), so it can be tested without a repo.
+func parseRefs(decoration string, remotes map[string]bool) (heads, remoteRefs, tags []string) {
 	for _, ref := range strings.Split(decoration, ",") {
 		ref = strings.TrimSpace(ref)
-		if name := strings.TrimPrefix(ref, "tag: "); name != ref && name != "" {
-			tags = append(tags, name)
+		switch {
+		case ref == "":
+			continue
+		case strings.HasPrefix(ref, "tag: "):
+			tags = append(tags, strings.TrimPrefix(ref, "tag: "))
+		case strings.Contains(ref, " -> "):
+			// "HEAD -> main": the branch the working tree is checked out on.
+			heads = append(heads, ref[strings.Index(ref, " -> ")+len(" -> "):])
+		case isRemoteRef(ref, remotes):
+			remoteRefs = append(remoteRefs, ref)
+		default:
+			heads = append(heads, ref)
 		}
 	}
-	return tags
+	return heads, remoteRefs, tags
+}
+
+// isRemoteRef reports whether ref's leading path segment names a configured
+// remote — the test that separates "origin/main" from a local "feature/x".
+func isRemoteRef(ref string, remotes map[string]bool) bool {
+	i := strings.Index(ref, "/")
+	return i > 0 && remotes[ref[:i]]
 }
 
 // CommitDiff returns the patch a single commit introduced, ready for diff.Parse.
@@ -513,6 +590,166 @@ func WorkingDiff(repo string) string {
 		return ""
 	}
 	return string(out)
+}
+
+// aiAgentMarkers pairs each case-insensitive substring that identifies an AI
+// coding agent in a commit's author name/email or its Co-authored-by trailers with
+// the agent's display name. Coding agents stamp themselves here: Claude Code adds a
+// "Co-Authored-By: Claude <noreply@anthropic.com>" trailer, and the others sign in
+// kind. The first pair whose marker is present names the agent, so order matters
+// (e.g. "anthropic" and "claude" both resolve to "Claude"). Extend this list to
+// recognize more agents.
+var aiAgentMarkers = []struct{ marker, name string }{
+	{"claude", "Claude"},
+	{"anthropic", "Claude"},
+	{"copilot", "Copilot"},
+	{"cursor", "Cursor"},
+	{"devin", "Devin"},
+	{"aider", "Aider"},
+	{"codex", "Codex"},
+	{"chatgpt", "ChatGPT"},
+	{"openai", "ChatGPT"},
+	{"gpt-", "ChatGPT"},
+}
+
+// aiAgent returns the display name of the first AI agent whose marker appears in
+// signals (case-insensitive), or "" if none — i.e. the work reads as human. The
+// caller passes only authorship signals (author/email/co-author trailers), never
+// the free-form message body, so ordinary prose can't trip a marker.
+func aiAgent(signals string) string {
+	hay := strings.ToLower(signals)
+	for _, a := range aiAgentMarkers {
+		if strings.Contains(hay, a.marker) {
+			return a.name
+		}
+	}
+	return ""
+}
+
+// authorCommit carries one non-merge commit's authorship signals plus its churn
+// (added+deleted lines) — the unit Authorship aggregates into the AI/human split.
+type authorCommit struct {
+	author    string
+	email     string
+	coauthors string
+	churn     int
+}
+
+// agent names the AI coding agent behind the commit (see aiAgent), or "" if it
+// reads as human-authored. NUL joins the fields so a marker can't straddle a
+// boundary and match across two unrelated values.
+func (c authorCommit) agent() string {
+	return aiAgent(c.author + "\x00" + c.email + "\x00" + c.coauthors)
+}
+
+// isAIAuthored reports whether any AI agent marker appears in the commit's author
+// or co-author fields.
+func (c authorCommit) isAIAuthored() bool { return c.agent() != "" }
+
+// authorshipFormat frames one line per commit: author, email, and the (possibly
+// multiple, %x1f-joined) Co-authored-by values. Leading %x1e (RS) marks each
+// commit so the --numstat block that follows the header parses unambiguously.
+const authorshipFormat = "--pretty=format:%x1e%an%x1f%ae%x1f%(trailers:key=Co-authored-by,valueonly,separator=%x1f)"
+
+// AuthorShare is one bucket of the branch's committed churn: a named AI agent
+// (e.g. "Claude") or "Human", with the added+deleted lines attributed to it.
+type AuthorShare struct {
+	Name  string
+	Churn int
+}
+
+// Authorship splits the branch's committed churn (added+deleted lines) by author
+// class — one bucket per AI agent that signed commits (named via aiAgentMarkers,
+// e.g. "Claude") plus "Human" — classifying each non-merge commit in base..HEAD by
+// its author and Co-authored-by trailers. It mirrors Commits' range fallback: when
+// base..HEAD is empty (HEAD sits on base) it classifies HEAD's full history
+// instead. Merges are excluded so their combined diffs don't double-count, and
+// uncommitted work — attributable to neither side — is left out. Buckets are
+// returned sorted by churn descending (ties by name); nil when there's no churn.
+func Authorship(repo, base string) []AuthorShare {
+	commits := authorshipLog(repo, base+"..HEAD")
+	if len(commits) == 0 {
+		commits = authorshipLog(repo, "HEAD")
+	}
+	byName := map[string]int{}
+	for _, c := range commits {
+		name := c.agent()
+		if name == "" {
+			name = "Human"
+		}
+		byName[name] += c.churn
+	}
+	var out []AuthorShare
+	for name, churn := range byName {
+		if churn > 0 {
+			out = append(out, AuthorShare{Name: name, Churn: churn})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Churn != out[j].Churn {
+			return out[i].Churn > out[j].Churn
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+// authorshipLog runs `git log --numstat` over revRange and parses the result into
+// per-commit authorship records. Returns nil on error (e.g. an empty range).
+func authorshipLog(repo, revRange string) []authorCommit {
+	out, err := exec.Command("git", "-C", repo, "log", "--no-color", "--no-merges", "--numstat", authorshipFormat, revRange).Output()
+	if err != nil {
+		return nil
+	}
+	return parseAuthorship(out)
+}
+
+// parseAuthorship turns `git log --numstat` output (framed by authorshipFormat)
+// into per-commit records. Each %x1e-delimited record is a header line (author,
+// email, co-authors, %x1f-separated) followed by the commit's numstat lines.
+// Pure, so it can be tested without a repository.
+func parseAuthorship(data []byte) []authorCommit {
+	var out []authorCommit
+	for _, rec := range strings.Split(string(data), "\x1e") {
+		rec = strings.Trim(rec, "\n")
+		if rec == "" {
+			continue
+		}
+		lines := strings.Split(rec, "\n")
+		f := strings.SplitN(lines[0], "\x1f", 3)
+		c := authorCommit{}
+		if len(f) > 0 {
+			c.author = f[0]
+		}
+		if len(f) > 1 {
+			c.email = f[1]
+		}
+		if len(f) > 2 {
+			c.coauthors = f[2]
+		}
+		for _, l := range lines[1:] {
+			c.churn += numstatChurn(l)
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// numstatChurn returns added+deleted for one `--numstat` line ("added<TAB>deleted
+// <TAB>path"), treating the binary "-\t-" markers and any unparsable line as 0.
+func numstatChurn(line string) int {
+	fields := strings.Fields(line)
+	if len(fields) < 3 {
+		return 0
+	}
+	add, del := 0, 0
+	if _, err := fmt.Sscanf(fields[0], "%d", &add); err != nil {
+		add = 0
+	}
+	if _, err := fmt.Sscanf(fields[1], "%d", &del); err != nil {
+		del = 0
+	}
+	return add + del
 }
 
 // Shortstat returns a one-line summary of the whole diff against base, e.g.

@@ -6,34 +6,85 @@ import (
 	"github.com/trebaud/diffcat/internal/git"
 )
 
-// overview.go holds the branch overview dashboard (viewOverview, toggled with
-// `S`): a full-screen, GitHub-style summary of the branch-vs-base diff — totals,
-// a per-file churn list with proportional add/del bars, and a language
-// breakdown. Entering/leaving the mode and the cursor live here; rendering is in
+// overview.go holds the overview dashboard (viewOverview, toggled with `S`): a
+// full-screen, GitHub-style summary — totals, a per-file churn list with
+// proportional add/del bars, and a language breakdown. It has two scopes: the
+// whole branch-vs-base diff (the default), or a single commit picked from the
+// history. Entering/leaving the mode and the cursor live here; rendering is in
 // overview_view.go.
 
-// enterOverview switches into the dashboard. Commits are loaded (if not already)
-// so the summary can show the branch's commit count.
+// enterOverview switches into the branch-vs-base dashboard. Commits are loaded
+// (if not already) so the summary can show the branch's commit count.
 func (m *model) enterOverview() {
 	if len(m.commits) == 0 {
 		m.loadCommits()
 	}
+	if !m.authorComputed {
+		m.authorShares = git.Authorship(m.repo, m.base)
+		m.authorComputed = true
+	}
+	m.overviewCommit = nil
+	m.overviewCommitFiles = nil
+	m.overviewReturn = viewBranch
 	m.mode = viewOverview
 	m.focus = focusFiles
 	m.overviewCursor = 0
 }
 
-// exitOverview returns to the default branch-vs-base view, restoring the diff
-// for the file under the tree cursor.
-func (m *model) exitOverview() {
-	m.mode = viewBranch
+// enterCommitOverview opens the dashboard scoped to a single commit: it
+// summarizes that commit's changed files instead of the branch diff. The
+// commit-count and AI/human-split rows (meaningful only across a range) give way
+// to the commit's SHA/subject and a single AI-or-human author label. Returns to
+// wherever it was opened from (the history list or the per-commit tree).
+//
+// When there's no single commit in scope (the history's working-tree row, or a
+// working-tree drill-in), there's nothing to scope to, so it falls back to the
+// branch-wide summary — including the AI/human split chart — still returning to
+// the view it was opened from.
+func (m *model) enterCommitOverview() {
+	c := m.detailsCommit()
+	if c == nil {
+		origin := m.mode
+		m.enterOverview()
+		m.overviewReturn = origin
+		return
+	}
+	files, err := git.CommitFiles(m.repo, c.SHA)
+	if err != nil {
+		files = nil
+	}
+	m.overviewCommit = c
+	m.overviewCommitFiles = files
+	m.overviewReturn = m.mode
+	m.mode = viewOverview
 	m.focus = focusFiles
-	m.loadDiff()
+	m.overviewCursor = 0
+}
+
+// exitOverview leaves the dashboard for the view it was opened from: the
+// branch-vs-base diff, the history list, or the per-commit tree, restoring that
+// view's diff.
+func (m *model) exitOverview() {
+	ret := m.overviewReturn
+	m.overviewCommit = nil
+	m.overviewCommitFiles = nil
+	m.focus = focusFiles
+	switch ret {
+	case viewLog:
+		m.mode = viewLog
+		m.loadCommitDiff()
+	case viewCommit:
+		m.mode = viewCommit
+		m.loadDiff()
+	default:
+		m.mode = viewBranch
+		m.loadDiff()
+	}
 }
 
 // moveOverviewCursor moves the dashboard's file selection, clamped to the list.
 func (m *model) moveOverviewCursor(delta int) {
-	n := len(m.files)
+	n := len(m.overviewFileSet())
 	if n == 0 {
 		return
 	}
@@ -46,9 +97,10 @@ func (m *model) moveOverviewCursor(delta int) {
 	}
 }
 
-// enterOverviewFile drills the highlighted dashboard file into the normal branch
-// diff view: it leaves the overview and jumps the tree cursor to that file
-// (expanding any collapsed ancestors), showing its diff.
+// enterOverviewFile drills the highlighted dashboard file into a diff view: the
+// branch overview opens it in the branch-vs-base tree; a commit overview opens
+// it in that commit's per-file tree. Either way it leaves the overview and jumps
+// the tree cursor to that file (expanding any collapsed ancestors).
 func (m *model) enterOverviewFile() {
 	files := m.overviewFiles()
 	if m.overviewCursor < 0 || m.overviewCursor >= len(files) {
@@ -56,14 +108,39 @@ func (m *model) enterOverviewFile() {
 		return
 	}
 	path := files[m.overviewCursor].Path
+	if c := m.overviewCommit; c != nil {
+		// Commit scope: land in that commit's per-file tree (viewCommit). If we
+		// came from the history list we still need to scope into it; if we came
+		// from the per-commit tree, m.files already holds the commit's files.
+		origin := m.overviewReturn
+		m.overviewCommit = nil
+		m.overviewCommitFiles = nil
+		if origin == viewCommit {
+			m.mode = viewCommit
+		} else {
+			m.scopeToCommit(c)
+		}
+		m.jumpToFile(path)
+		return
+	}
 	m.mode = viewBranch
 	m.jumpToFile(path)
 }
 
-// overviewFiles returns the changed files sorted by total churn (added+deleted)
-// descending, then path — the order the dashboard lists and the cursor indexes.
+// overviewFileSet is the file list the dashboard summarizes: the in-scope
+// commit's files for a commit overview, else the branch-vs-base list (m.files).
+func (m model) overviewFileSet() []git.FileChange {
+	if m.overviewCommit != nil {
+		return m.overviewCommitFiles
+	}
+	return m.files
+}
+
+// overviewFiles returns the in-scope changed files sorted by total churn
+// (added+deleted) descending, then path — the order the dashboard lists and the
+// cursor indexes.
 func (m model) overviewFiles() []git.FileChange {
-	out := append([]git.FileChange(nil), m.files...)
+	out := append([]git.FileChange(nil), m.overviewFileSet()...)
 	sort.SliceStable(out, func(i, j int) bool {
 		ci, cj := churnOf(out[i]), churnOf(out[j])
 		if ci != cj {

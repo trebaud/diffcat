@@ -16,7 +16,7 @@ func TestParseCommits(t *testing.T) {
 		record("ccc333full", "ccc333", "Grace Hopper", "grace@example.io", "2026-05-28", "ddd444 eee555", "", "Merge branch 'x' into main", "") + "\n" +
 		record("fff666full", "fff666", "Alan Turing", "alan@example.io", "2026-05-27", "", "", "Root commit, no parent", "")
 
-	got := parseCommits([]byte(blob))
+	got := parseCommits([]byte(blob), map[string]bool{"origin": true})
 	if len(got) != 3 {
 		t.Fatalf("got %d commits, want 3", len(got))
 	}
@@ -61,6 +61,54 @@ func TestParseCommits(t *testing.T) {
 	if len(got[1].Tags) != 0 {
 		t.Errorf("commit 1 should have no tags, got %v", got[1].Tags)
 	}
+
+	// "HEAD -> main" becomes a local branch head; bare tag-only commits carry none.
+	if want := []string{"main"}; len(got[0].Heads) != 1 || got[0].Heads[0] != want[0] {
+		t.Errorf("commit 0 heads = %v, want %v", got[0].Heads, want)
+	}
+	if len(got[1].Heads) != 0 {
+		t.Errorf("commit 1 should have no heads, got %v", got[1].Heads)
+	}
+}
+
+// TestParseRefs covers the three ref kinds split out of a %D decoration: local
+// branch heads (incl. the HEAD-pointed one and detached HEAD), remote-tracking
+// refs, and tags — order preserved within each kind.
+func TestParseRefs(t *testing.T) {
+	remoteSet := map[string]bool{"origin": true}
+	heads, remotes, tags := parseRefs("HEAD -> main, feature/x, origin/main, origin/HEAD, tag: v1.2.0, tag: v1.1.0", remoteSet)
+
+	if want := []string{"main", "feature/x"}; !equalStrings(heads, want) {
+		t.Errorf("heads = %v, want %v", heads, want)
+	}
+	if want := []string{"origin/main", "origin/HEAD"}; !equalStrings(remotes, want) {
+		t.Errorf("remotes = %v, want %v", remotes, want)
+	}
+	if want := []string{"v1.2.0", "v1.1.0"}; !equalStrings(tags, want) {
+		t.Errorf("tags = %v, want %v", tags, want)
+	}
+
+	// Detached HEAD: "HEAD" alone is a head, not a remote.
+	if heads, _, _ := parseRefs("HEAD, origin/main", remoteSet); !equalStrings(heads, []string{"HEAD"}) {
+		t.Errorf("detached HEAD heads = %v, want [HEAD]", heads)
+	}
+
+	// Empty decoration yields nothing.
+	if h, r, tg := parseRefs("", remoteSet); len(h)+len(r)+len(tg) != 0 {
+		t.Errorf("empty decoration = %v/%v/%v, want all empty", h, r, tg)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestMergeChanges covers the name-status + numstat join used by both
@@ -101,10 +149,10 @@ func TestMergeChanges(t *testing.T) {
 }
 
 func TestParseCommitsEmpty(t *testing.T) {
-	if got := parseCommits(nil); len(got) != 0 {
+	if got := parseCommits(nil, nil); len(got) != 0 {
 		t.Errorf("nil input: got %d commits, want 0", len(got))
 	}
-	if got := parseCommits([]byte("\n")); len(got) != 0 {
+	if got := parseCommits([]byte("\n"), nil); len(got) != 0 {
 		t.Errorf("blank input: got %d commits, want 0", len(got))
 	}
 }
@@ -124,6 +172,80 @@ func TestStatusPaths(t *testing.T) {
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("path[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// authorRec builds one authorship record in the framing parseAuthorship expects:
+// a leading RS (0x1e), a header of author/email/co-authors joined by US (0x1f),
+// then the commit's --numstat lines (each "added\tdeleted\tpath").
+func authorRec(author, email, coauthors string, numstat ...string) string {
+	rec := "\x1e" + author + "\x1f" + email + "\x1f" + coauthors
+	for _, n := range numstat {
+		rec += "\n" + n
+	}
+	return rec
+}
+
+func TestParseAuthorshipChurn(t *testing.T) {
+	data := authorRec("Ada", "ada@x.io", "", "10\t2\tmain.go", "-\t-\tlogo.png", "3\t0\tutil.go") +
+		"\n" + authorRec("Bob", "bob@x.io", "Claude <noreply@anthropic.com>", "5\t5\tapp.go")
+	got := parseAuthorship([]byte(data))
+	if len(got) != 2 {
+		t.Fatalf("got %d commits, want 2", len(got))
+	}
+	// binary "-\t-" contributes 0; the rest sum added+deleted.
+	if got[0].churn != 15 {
+		t.Errorf("commit 0 churn = %d, want 15", got[0].churn)
+	}
+	if got[1].churn != 10 {
+		t.Errorf("commit 1 churn = %d, want 10", got[1].churn)
+	}
+	if got[0].coauthors != "" || got[1].coauthors != "Claude <noreply@anthropic.com>" {
+		t.Errorf("coauthors parsed wrong: %q / %q", got[0].coauthors, got[1].coauthors)
+	}
+}
+
+func TestIsAIAuthored(t *testing.T) {
+	cases := []struct {
+		name string
+		c    authorCommit
+		want bool
+	}{
+		{"human", authorCommit{author: "Ada Lovelace", email: "ada@x.io"}, false},
+		{"claude co-author", authorCommit{author: "Ada", email: "ada@x.io", coauthors: "Claude <noreply@anthropic.com>"}, true},
+		{"copilot author", authorCommit{author: "Copilot", email: "bot@github.com"}, true},
+		{"anthropic email", authorCommit{author: "Ada", email: "x@anthropic.com"}, true},
+		{"unrelated bot name", authorCommit{author: "Roberto", email: "rob@x.io"}, false},
+	}
+	for _, tc := range cases {
+		if got := tc.c.isAIAuthored(); got != tc.want {
+			t.Errorf("%s: isAIAuthored() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestCommitAIAgent(t *testing.T) {
+	cases := []struct {
+		name string
+		c    Commit
+		want string // the agent name, "" for human
+	}{
+		{"human", Commit{Author: "Ada Lovelace", AuthorEmail: "ada@x.io"}, ""},
+		{"claude trailer", Commit{Author: "Ada", AuthorEmail: "ada@x.io", Body: "Fix nav\n\nCo-Authored-By: Claude <noreply@anthropic.com>"}, "Claude"},
+		{"anthropic resolves to claude", Commit{Author: "Ada", Body: "x\n\nco-authored-by: bot <noreply@anthropic.com>"}, "Claude"},
+		{"copilot author", Commit{Author: "Copilot", AuthorEmail: "bot@github.com"}, "Copilot"},
+		// Prose mentioning a tool's name must not flag a human commit: "cursor"
+		// here is the UI cursor, not the Cursor editor, and lives in the body, not
+		// a trailer.
+		{"marker word in prose", Commit{Author: "Ada", AuthorEmail: "ada@x.io", Body: "Keep the cursor on the diff when the sidebar collapses."}, ""},
+	}
+	for _, tc := range cases {
+		if got := tc.c.AIAgent(); got != tc.want {
+			t.Errorf("%s: AIAgent() = %q, want %q", tc.name, got, tc.want)
+		}
+		if got := tc.c.IsAIAuthored(); got != (tc.want != "") {
+			t.Errorf("%s: IsAIAuthored() = %v, want %v", tc.name, got, tc.want != "")
 		}
 	}
 }

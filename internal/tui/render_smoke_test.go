@@ -129,6 +129,16 @@ func TestRenderNoWrap(t *testing.T) {
 	overview.commits = logSampleModel().commits
 	overviewEmpty := overview
 	overviewEmpty.files, overviewEmpty.rows = nil, nil // "no changes" state
+	// The commit-scoped overview (opened with S on a commit): summarizes one
+	// commit's files, with the SHA/subject tail and a single author label. One
+	// human-authored, one AI-authored to exercise both label branches.
+	commitOverview := sampleModel()
+	commitOverview.mode = viewOverview
+	commitOverview.overviewReturn = viewLog
+	commitOverview.overviewCommit = &git.Commit{Short: "aaa1111", Author: "Ada Lovelace", Subject: "Tighten README for end users with a subject long enough to need truncation in a narrow pane"}
+	commitOverview.overviewCommitFiles = sampleModel().files
+	aiOverview := commitOverview
+	aiOverview.overviewCommit = &git.Commit{Short: "bbb2222", Author: "Claude", AuthorEmail: "noreply@anthropic.com", Subject: "Wire up the per-commit overview"}
 	// A committed diff search, the active search prompt, and the fuzzy file picker.
 	searched := sampleModel()
 	searched.focus = focusDiff
@@ -149,7 +159,7 @@ func TestRenderNoWrap(t *testing.T) {
 	wideLog := logSampleModel()
 	wideLog.sidebar = sidebarWide
 	wideLog.commits[0].Tags = []string{"v1.2.0", "v1.1.0"}
-	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewEmpty, searched, searchPrompt, finding, hiddenSidebar, wideLog} {
+	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewEmpty, commitOverview, aiOverview, searched, searchPrompt, finding, hiddenSidebar, wideLog} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -171,12 +181,17 @@ func TestFullScreenFill(t *testing.T) {
 	overview := sampleModel()
 	overview.mode = viewOverview
 	overview.commits = logSampleModel().commits
+	commitOverview := sampleModel()
+	commitOverview.mode = viewOverview
+	commitOverview.overviewReturn = viewLog
+	commitOverview.overviewCommit = &git.Commit{Short: "aaa1111", Author: "Ada Lovelace", Subject: "Tighten README"}
+	commitOverview.overviewCommitFiles = sampleModel().files
 	hiddenSidebar := sampleModel()
 	hiddenSidebar.sidebar = sidebarHidden
 	wideLog := logSampleModel()
 	wideLog.sidebar = sidebarWide
 	wideLog.commits[0].Tags = []string{"v1.2.0"}
-	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, commitSampleModel(), overview, hiddenSidebar, wideLog} {
+	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, commitSampleModel(), overview, commitOverview, hiddenSidebar, wideLog} {
 		m.focus = focusDiff
 		for _, split := range []bool{false, true} {
 			m.splitView = split

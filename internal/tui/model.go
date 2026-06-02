@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strconv"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -130,6 +131,16 @@ type model struct {
 
 	animFrame int // drives the nyan cat's leg/face wiggle
 
+	// The nyan cat's horizontal position is spring-driven rather than snapped to
+	// the cursor: nyanPos eases toward the cursor's frac so the cat glides (with a
+	// little momentum and overshoot) on jumps instead of teleporting. Kept in frac
+	// space [0,1] so it settles in a fixed time regardless of bar width.
+	nyanPos       float64       // eased reading position, chases targetFrac()
+	nyanVel       float64       // its velocity (frac/sec), for the spring integrator
+	nyanWasMoving bool          // last tick's motion state, to catch the moving→stopped edge
+	nyanSettle    int           // countdown of the one-shot arrival-blink frames
+	animAccum     time.Duration // paces animFrame on wall-clock, independent of tick rate
+
 	// A background sync that changes the working tree flags the affected files so
 	// their tree rows pulse until the reader opens them. fileSig is each path's
 	// last-seen change signature (status + line counts); when a sync changes or
@@ -170,7 +181,24 @@ type model struct {
 
 	// Overview dashboard (viewOverview, toggled with `S`). overviewCursor is the
 	// selected file row in the per-file churn list.
-	overviewCursor int
+	//
+	// The dashboard has two scopes. The default is branch-vs-base (overviewCommit
+	// nil) and summarizes m.files. Pressing `S` on a commit in the history (or
+	// while drilled into one) instead opens a per-commit overview: overviewCommit
+	// is that commit and overviewCommitFiles its changed files, summarized in
+	// place of m.files. overviewReturn is the mode to restore on exit (viewBranch
+	// for the branch overview, viewLog/viewCommit for a commit one).
+	overviewCursor      int
+	overviewCommit      *git.Commit
+	overviewCommitFiles []git.FileChange
+	overviewReturn      viewMode
+
+	// Authorship split for the overview: committed churn bucketed by author class
+	// — one entry per named AI agent plus "Human" (git.Authorship). Computed lazily
+	// on first entry and invalidated by refresh, so it doesn't shell `git log` on
+	// every dashboard open.
+	authorShares   []git.AuthorShare
+	authorComputed bool
 
 	err error
 }
@@ -296,7 +324,7 @@ func (m model) selectedRow() *treeRow {
 	return nil
 }
 
-func (m model) Init() tea.Cmd { return tea.Batch(tickCmd(), syncCmd(m.repo, m.baseName)) }
+func (m model) Init() tea.Cmd { return tea.Batch(tickCmd(tickSlow), syncCmd(m.repo, m.baseName)) }
 
 // selectedFile returns the file under the cursor, or nil when the cursor is on a
 // folder row (or the tree is empty) — those have no diff to show.

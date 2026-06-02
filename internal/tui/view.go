@@ -174,6 +174,10 @@ func (m model) headerView() string {
 		return left + mid + count
 	}
 	if m.mode == viewOverview {
+		if c := m.overviewCommit; c != nil {
+			mid := mutedStyle.Render(fmt.Sprintf("  %s · overview", c.Short))
+			return left + mid + "  " + headingStyle.Render(truncateText(c.Subject, 60))
+		}
 		mid := mutedStyle.Render(fmt.Sprintf("  %s · overview", branchLabel(m.branch)))
 		stat := ""
 		if m.shortstat != "" {
@@ -388,14 +392,15 @@ func (m model) commitRow(c git.Commit, selected bool, width int) string {
 func (m model) commitRowWide(c git.Commit, glyph string, selected bool, width int) string {
 	head := glyph + " " + c.Short + "  "
 
-	tagPart := ""
-	if len(c.Tags) > 0 {
-		tagPart = strings.Join(c.Tags, " ") + "  "
+	refsPlain, refsStyled := refBadges(c)
+	refPart := ""
+	if refsPlain != "" {
+		refPart = refsPlain + "  "
 	}
 
 	meta := truncateText(c.Author, 16) + "  " + c.Date
 
-	fixed := lipgloss.Width(head) + lipgloss.Width(tagPart)
+	fixed := lipgloss.Width(head) + lipgloss.Width(refPart)
 	subjAvail := width - fixed - lipgloss.Width(meta) - 2
 	if subjAvail < 12 {
 		// Too cramped for the right metadata — give the room back to the subject.
@@ -413,7 +418,7 @@ func (m model) commitRowWide(c git.Commit, glyph string, selected bool, width in
 	}
 
 	if selected {
-		row := head + tagPart + subj + strings.Repeat(" ", gap) + meta
+		row := head + refPart + subj + strings.Repeat(" ", gap) + meta
 		return selectedRowStyle.Width(width).Render(row)
 	}
 
@@ -426,8 +431,8 @@ func (m model) commitRowWide(c git.Commit, glyph string, selected bool, width in
 	b.WriteString(" ")
 	b.WriteString(metaStyle.Render(c.Short))
 	b.WriteString("  ")
-	if tagPart != "" {
-		b.WriteString(tagStyle.Render(strings.TrimRight(tagPart, " ")))
+	if refsStyled != "" {
+		b.WriteString(refsStyled)
 		b.WriteString("  ")
 	}
 	b.WriteString(subj)
@@ -436,6 +441,34 @@ func (m model) commitRowWide(c git.Commit, glyph string, selected bool, width in
 		b.WriteString(mutedStyle.Render(meta))
 	}
 	return b.String()
+}
+
+// refBadges builds a commit's ref decoration the way tig and `git log --decorate`
+// do: local branches as [main] (green, the checked-out one bold), remote-tracking
+// refs as {origin/main} (red), and tags bare in gold. It returns the plain text
+// (for width math) and the colorized version in lockstep, both empty when the
+// commit carries no refs. The selected row uses the plain form inside its single
+// highlight bar; unselected rows use the styled form.
+func refBadges(c git.Commit) (plain, styled string) {
+	var plainParts, styledParts []string
+	for _, h := range c.Heads {
+		badge := "[" + h + "]"
+		plainParts = append(plainParts, badge)
+		styledParts = append(styledParts, headStyle.Render(badge))
+	}
+	for _, r := range c.Remotes {
+		badge := "{" + r + "}"
+		plainParts = append(plainParts, badge)
+		styledParts = append(styledParts, remoteStyle.Render(badge))
+	}
+	for _, t := range c.Tags {
+		plainParts = append(plainParts, t)
+		styledParts = append(styledParts, tagStyle.Render(t))
+	}
+	if len(plainParts) == 0 {
+		return "", ""
+	}
+	return strings.Join(plainParts, " "), strings.Join(styledParts, " ")
 }
 
 // treeRow renders one line of the file tree — a folder ("▾ internal/tui  +42 -7")
@@ -944,14 +977,26 @@ func (m model) nyanProgress(width int) string {
 	if m.focus != focusDiff {
 		return strings.Repeat(" ", max(0, width))
 	}
-	frac := 0.0
-	if last := m.totalDiffRows() - 1; last > 0 {
-		frac = float64(m.diffCursor) / float64(last)
-	}
-	return nyanBar(width, frac, m.animFrame)
+	return nyanBar(width, m.nyanPos, m.animFrame, m.nyanSettle)
 }
 
-func nyanBar(width int, frac float64, frame int) string {
+// targetFrac is the cat's destination: the cursor's position through the diff,
+// in [0,1]. The rendered position (m.nyanPos) springs toward this each tick.
+func (m model) targetFrac() float64 {
+	if last := m.totalDiffRows() - 1; last > 0 {
+		return float64(m.diffCursor) / float64(last)
+	}
+	return 0
+}
+
+// nyanMoving reports whether the position spring still has meaningful distance or
+// velocity left — i.e. whether the fast tick rate is worth paying for.
+func (m model) nyanMoving(target float64) bool {
+	d := target - m.nyanPos
+	return d > 1e-3 || d < -1e-3 || m.nyanVel > 1e-3 || m.nyanVel < -1e-3
+}
+
+func nyanBar(width int, frac float64, frame, settle int) string {
 	if width < 8 {
 		return strings.Repeat(" ", max(0, width))
 	}
@@ -967,12 +1012,25 @@ func nyanBar(width int, frac float64, frame int) string {
 	if frame%2 == 1 {
 		cat = "=^-^="
 	}
+	// Arrival blink: on settling after a glide, the eyes pop wide for a beat, then
+	// hold a content squint (the main, clearly-visible beat) before the gait
+	// resumes. All faces are 5 wide so the layout never shifts. (settle counts down
+	// from settleFrames ≈ 800ms: ~265ms wide, then ~530ms squint.)
+	switch {
+	case settle > 16:
+		cat = "=^o^=" // just arrived — eyes wide
+	case settle > 0:
+		cat = "=^_^=" // happy squint, held
+	}
 	catW := lipgloss.Width(cat)
 
 	maxX := width - catW
 	if maxX < 1 {
 		maxX = 1
 	}
+	// The spring-eased frac (m.nyanPos) lands the cat on the nearest whole cell —
+	// the thin ━ trail can only grow in whole cells, so the smoothness comes from
+	// the spring gliding the cat cell-by-cell on jumps, not from sub-cell rendering.
 	catX := int(frac*float64(maxX) + 0.5)
 
 	// Perceptually-even rainbow: constant OKLCH L=0.72 C=0.155, hue rotating, so
@@ -1014,6 +1072,24 @@ func (m model) paneHeading(text string, pane focusPane) string {
 	return headingStyle.Render("  " + text)
 }
 
+// onBaseBranch reports whether the current branch is the base it would be
+// diffed against. There the branch diff is degenerate — the merge base
+// collapses to HEAD, so "D" would only ever show working-tree-vs-HEAD (already
+// reachable as the history's ○ local entry). Most commonly: sitting on
+// main/master. When true the "D" affordance is hidden.
+func (m model) onBaseBranch() bool {
+	return m.branch != "" && m.branch == m.baseName
+}
+
+// branchDiffLabel names the D shortcut after the actual base branch, e.g.
+// "diff vs main", falling back to a generic label when the base is unnamed.
+func (m model) branchDiffLabel() string {
+	if m.baseName == "" {
+		return "branch diff"
+	}
+	return "diff vs " + m.baseName
+}
+
 func (m model) footerView() string {
 	// While typing a query the footer becomes the search prompt.
 	if m.searchActive {
@@ -1027,12 +1103,14 @@ func (m model) footerView() string {
 		}
 		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewLog:
-		keys = []string{
-			"j/k select", "h/l ⇄ pane", "↵ open", "D branch diff", "d details", "s split", "t theme", "? help", "q quit",
+		keys = []string{"j/k select", "h/l ⇄ pane", "↵ open"}
+		if !m.onBaseBranch() {
+			keys = append(keys, "D "+m.branchDiffLabel())
 		}
+		keys = append(keys, "d details", "S summary", "s split", "t theme", "? help", "q quit")
 	case viewCommit:
 		keys = []string{
-			"j/k move", "h/l ⇄ pane", "↵ open", "f find", "/ search", "d details", "[ ] sidebar", "s split", "t theme", "esc back", "? help", "q quit",
+			"j/k move", "h/l ⇄ pane", "↵ open", "f find", "/ search", "d details", "S summary", "[ ] sidebar", "s split", "t theme", "esc back", "? help", "q quit",
 		}
 	default:
 		keys = []string{
@@ -1084,8 +1162,16 @@ func (m model) helpBox() string {
 		"  Esc          step back one level (commit tree → history)",
 		"",
 		headingStyle.Render("  branch diff"),
-		"  D            aggregated branch-vs-base diff (file tree + diff)",
-		"  S            toggle the branch overview (churn bars + languages)",
+	}
+	// On the base branch the branch diff is degenerate, so "D" is hidden in the
+	// footer; mirror that here rather than advertise a key that shows nothing.
+	if !m.onBaseBranch() {
+		label := m.branchDiffLabel()
+		lines = append(lines, "  D            aggregated "+label+" (file tree + diff)")
+	}
+	lines = append(lines,
+		"  S            toggle the overview (churn bars + languages) — branch-wide,",
+		"               or scoped to the selected commit from the history",
 		"",
 		headingStyle.Render("  view"),
 		"  s            toggle unified / side-by-side",
@@ -1094,7 +1180,7 @@ func (m model) helpBox() string {
 		"  ? / q        toggle help / quit",
 		"",
 		mutedStyle.Render("  press any key to dismiss"),
-	}
+	)
 	return floatingBox(strings.Join(lines, "\n"))
 }
 
@@ -1144,6 +1230,12 @@ func (m model) detailsContent() []string {
 		"",
 		mutedStyle.Render("Author  ") + truncateText(author, w-8),
 		mutedStyle.Render("Date    ") + truncateText(c.Date, w-8),
+	}
+	if len(c.Heads) > 0 {
+		lines = append(lines, mutedStyle.Render("Branch  ")+headStyle.Render(truncateText(strings.Join(c.Heads, ", "), w-8)))
+	}
+	if len(c.Remotes) > 0 {
+		lines = append(lines, mutedStyle.Render("Remote  ")+remoteStyle.Render(truncateText(strings.Join(c.Remotes, ", "), w-8)))
 	}
 	if len(c.Tags) > 0 {
 		lines = append(lines, mutedStyle.Render("Tags    ")+tagStyle.Render(truncateText(strings.Join(c.Tags, ", "), w-8)))

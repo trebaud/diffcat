@@ -58,6 +58,8 @@ var (
 	branchStyle    lipgloss.Style // the current branch name in the header
 	baseBadgeStyle lipgloss.Style // the base branch, as a colored pill in the header
 	tagStyle       lipgloss.Style // git tags in the commit details / history list
+	headStyle      lipgloss.Style // local branch refs, e.g. [main]
+	remoteStyle    lipgloss.Style // remote-tracking refs, e.g. {origin/main}
 
 	catStyle lipgloss.Style // the nyan cat — brand magenta, kept off the selection blue
 
@@ -202,6 +204,12 @@ func ApplyTheme(isDark bool) {
 	// Git tags read in a subtle gold — git's own decoration color for tags, kept
 	// muted (not bold) so they sit quietly beside the brighter subject/SHA.
 	tagStyle = lipgloss.NewStyle().Foreground(ld(lipgloss.Color("#9a6700"), lipgloss.Color("#d4a72c")))
+
+	// Branch decorations track git's own ref colors so the badges read the way
+	// `git log --decorate` and tig do: local branches green, remote-tracking refs
+	// red. The checked-out branch ([main]) is bold to set it apart from the rest.
+	headStyle = lipgloss.NewStyle().Foreground(colAdded).Bold(true)
+	remoteStyle = lipgloss.NewStyle().Foreground(colRemoved)
 
 	// The number/marker gutter rides the brighter gutter band; the code body uses
 	// diffAddBg/diffDelBg (the deeper body band) in renderCode.

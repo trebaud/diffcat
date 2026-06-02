@@ -9,14 +9,22 @@ import (
 	"github.com/trebaud/diffcat/internal/git"
 )
 
-// tickMsg drives the nyan cat's wiggle. ~7fps is enough for a charming gait
-// without busy-spinning the terminal.
+// tickMsg drives the nyan cat. The loop runs at tickSlow when the cat is settled
+// — ~7fps, enough for a charming gait without busy-spinning the terminal — and
+// speeds up to tickFast only while the spring is in motion, so a glide reads as
+// smooth without paying the redraw cost when nothing's moving.
 type tickMsg struct{}
 
-const tickInterval = 150 * time.Millisecond
+const (
+	tickSlow = 150 * time.Millisecond // settled: gait/pulse/shimmer only
+	tickFast = 33 * time.Millisecond  // ~30fps while the position spring is moving
 
-func tickCmd() tea.Cmd {
-	return tea.Tick(tickInterval, func(time.Time) tea.Msg { return tickMsg{} })
+	// settleFrames is how many fast ticks the cat's arrival blink lasts (~800ms).
+	settleFrames = 24
+)
+
+func tickCmd(d time.Duration) tea.Cmd {
+	return tea.Tick(d, func(time.Time) tea.Msg { return tickMsg{} })
 }
 
 // gitStateMsg carries the result of a background git-state poll. The fingerprint
@@ -48,8 +56,44 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		m.animFrame++
-		return m, tickCmd()
+		// Spring the cat's position toward the cursor. A soft underdamped spring
+		// (low ω for a longer, smoother catch-up; ζ≈0.5 for a pronounced bounce) —
+		// on a jump it glides through more intermediate cells and visibly overshoots
+		// (~16%) before springing back, and line-by-line moves trail smoothly rather
+		// than snapping. Integrated with a fixed dt for stability; when settled
+		// target≈pos, so this is a no-op regardless of the (then slower) tick rate.
+		target := m.targetFrac()
+		if m.focus != focusDiff {
+			m.nyanPos, m.nyanVel = target, 0 // hidden: snap so it's in place when focused
+		} else {
+			const omega, zeta, dt = 11.0, 0.5, 0.033
+			a := omega*omega*(target-m.nyanPos) - 2*zeta*omega*m.nyanVel
+			m.nyanVel += a * dt
+			m.nyanPos += m.nyanVel * dt
+		}
+		// The instant the spring settles after a glide, kick off a one-shot "settle"
+		// reaction (a happy blink) — distinct from the perpetual leg gait. Detected
+		// as the moving→stopped edge while the cat is on screen.
+		moving := m.focus == focusDiff && m.nyanMoving(target)
+		if m.nyanWasMoving && !moving {
+			m.nyanSettle = settleFrames
+		}
+		m.nyanWasMoving = moving
+		if m.nyanSettle > 0 {
+			m.nyanSettle--
+		}
+		// Pace animFrame (gait/pulse/shimmer) on wall-clock so its ~7fps look is
+		// unchanged whether the physics loop is running fast or slow.
+		interval := tickSlow
+		if moving || m.nyanSettle > 0 { // run fast through the glide and its settle blink
+			interval = tickFast
+		}
+		m.animAccum += interval
+		for m.animAccum >= tickSlow {
+			m.animFrame++
+			m.animAccum -= tickSlow
+		}
+		return m, tickCmd(interval)
 
 	case gitStateMsg:
 		// Only do the (more expensive) refresh when the cheap fingerprint moved;
@@ -178,9 +222,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "esc":
 		// Esc only steps back one level toward the history view (the default): a
-		// per-commit (or working-tree) drill-in → the history list; the branch
-		// overview → the branch diff → the history list. On the history view, the
-		// home screen, it does nothing — use q / ctrl+c to quit.
+		// per-commit (or working-tree) drill-in → the history list; the overview →
+		// wherever it was opened from (the branch diff, the history list, or the
+		// per-commit tree). On the history view, the home screen, it does nothing —
+		// use q / ctrl+c to quit.
 		switch m.mode {
 		case viewCommit:
 			m.exitCommit()
@@ -199,6 +244,15 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// already in history
 		case viewCommit:
 			m.exitCommit()
+		case viewOverview:
+			// Leave the overview to its origin first, then step that to history —
+			// so a commit overview's stashed branch tree is restored properly.
+			m.exitOverview()
+			if m.mode == viewCommit {
+				m.exitCommit()
+			} else if m.mode != viewLog {
+				m.enterLog()
+			}
 		default:
 			m.enterLog()
 		}
@@ -207,7 +261,12 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "D":
 		// Open the aggregated branch-vs-base diff (the file tree + diff). From a
 		// per-commit/working-tree drill-in, restore the branch tree on the way; from
-		// the overview, drop back to the diff it summarizes.
+		// the overview, drop back to the branch diff it (or its origin) summarizes.
+		// On the base branch the diff is degenerate (merge base = HEAD), so the key
+		// is inert — matching the hidden footer/help hint — and the reader stays put.
+		if m.onBaseBranch() {
+			return m, nil
+		}
 		switch m.mode {
 		case viewBranch:
 			// already showing the branch diff
@@ -215,7 +274,16 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.exitCommit()
 			m.exitLog()
 		case viewOverview:
+			// Normalize through the origin so a commit overview's stashed branch
+			// tree is restored, then land on the branch diff.
 			m.exitOverview()
+			switch m.mode {
+			case viewCommit:
+				m.exitCommit()
+				m.exitLog()
+			case viewLog:
+				m.exitLog()
+			}
 		default:
 			m.exitLog()
 		}
@@ -241,12 +309,18 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "S":
-		// Toggle the branch overview dashboard (only from / back to the branch view).
+		// Toggle the overview dashboard. From the branch-vs-base view it's the
+		// branch overview; from the history list or a per-commit tree it's scoped
+		// to the in-scope commit, falling back to the branch overview on the
+		// working-tree row (no single commit to scope to). `S` (or esc) backs out
+		// to wherever it was opened from.
 		switch m.mode {
 		case viewOverview:
 			m.exitOverview()
 		case viewBranch:
 			m.enterOverview()
+		case viewLog, viewCommit:
+			m.enterCommitOverview()
 		}
 		return m, nil
 
@@ -546,6 +620,14 @@ func abs(n int) int {
 func (m *model) refresh() {
 	m.base = git.BaseRef(m.repo, m.baseName)
 	m.shortstat = git.Shortstat(m.repo, m.base)
+	m.authorComputed = false // recompute the human/AI split against the new base
+
+	if m.mode == viewOverview && m.overviewCommit != nil {
+		// A commit overview summarizes an immutable commit; leave the underlying
+		// origin state (including any branch tree stashed by a drill-in) untouched
+		// so backing out of the overview restores it intact.
+		return
+	}
 
 	if m.mode == viewCommit {
 		if m.scopeWorking {

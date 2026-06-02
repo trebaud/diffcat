@@ -42,7 +42,7 @@ func (m model) overviewBody(width, height int) []string {
 	}
 
 	top := []string{padLine(m.overviewSummary(), width)}
-	if langs := languageStats(m.files); len(langs) > 0 {
+	if langs := languageStats(m.overviewFileSet()); len(langs) > 0 {
 		total := 0
 		for _, l := range langs {
 			total += l.churn
@@ -55,6 +55,29 @@ func (m model) overviewBody(width, height int) []string {
 			top = append(top, padLine(m.langRow(l, total, width), width))
 		}
 	}
+	if c := m.overviewCommit; c != nil {
+		// A single commit's churn is all one class, so the split is trivially
+		// 100/0: when an AI agent signed it, name the agent at 100% over an empty
+		// Human row; otherwise it's all Human.
+		top = append(top, padLine("", width), padLine(headingStyle.Render("  Authored by"), width))
+		if agent := c.AIAgent(); agent != "" {
+			top = append(top,
+				padLine(shareRow(agent, 1, 1, titleStyle), width),
+				padLine(shareRow("Human", 0, 1, addedStyle), width))
+		} else {
+			top = append(top, padLine(shareRow("Human", 1, 1, addedStyle), width))
+		}
+	} else if total := authorTotal(m.authorShares); total > 0 {
+		top = append(top, padLine("", width), padLine(headingStyle.Render("  Authored by"), width))
+		for _, s := range m.authorShares {
+			style := titleStyle
+			if s.Name == "Human" {
+				style = addedStyle
+			}
+			top = append(top, padLine(shareRow(s.Name, s.Churn, total, style), width))
+		}
+	}
+
 	top = append(top, padLine("", width),
 		padLine(headingStyle.Render(fmt.Sprintf("  Files changed (%d)", len(files))), width))
 
@@ -98,10 +121,12 @@ func (m model) overviewBody(width, height int) []string {
 }
 
 // overviewSummary is the one-line totals row: file count, aggregate +adds/-dels,
-// and the branch's commit count.
+// and a scope tail — the branch's commit count, or for a commit overview the
+// commit's short SHA and subject.
 func (m model) overviewSummary() string {
+	files := m.overviewFileSet()
 	add, del := 0, 0
-	for _, f := range m.files {
+	for _, f := range files {
 		if f.Added > 0 {
 			add += f.Added
 		}
@@ -110,25 +135,45 @@ func (m model) overviewSummary() string {
 		}
 	}
 	stat := addedStyle.Render(fmt.Sprintf("+%d", add)) + " " + removedStyle.Render(fmt.Sprintf("-%d", del))
-	commits := mutedStyle.Render(fmt.Sprintf("%d commits", len(m.commits)))
-	return "  " + headingStyle.Render(fmt.Sprintf("%d files changed", len(m.files))) +
-		"   " + stat + "   " + commits
+	tail := mutedStyle.Render(fmt.Sprintf("%d commits", len(m.commits)))
+	if c := m.overviewCommit; c != nil {
+		tail = metaStyle.Render(c.Short) + " " + mutedStyle.Render(truncateText(c.Subject, 50))
+	}
+	return "  " + headingStyle.Render(fmt.Sprintf("%d files changed", len(files))) +
+		"   " + stat + "   " + tail
+}
+
+// authorTotal sums the churn across authorship buckets — the denominator for the
+// "Authored by" share bars.
+func authorTotal(shares []git.AuthorShare) int {
+	total := 0
+	for _, s := range shares {
+		total += s.Churn
+	}
+	return total
 }
 
 // langRow renders one language's share: a padded name, a fixed mini-bar of its
 // fraction of total churn, and the percentage.
 func (m model) langRow(l langStat, total, width int) string {
+	return shareRow(l.name, l.churn, total, metaStyle)
+}
+
+// shareRow renders a labeled proportional mini-bar: a padded label, a fixed-width
+// bar whose filled fraction is value/total in the given color, and the rounded
+// percentage. It's the shared shape behind the Languages and Authorship rows.
+func shareRow(label string, value, total int, fill lipgloss.Style) string {
 	const barW = 12
 	pct, filled := 0, 0
 	if total > 0 {
-		pct = int(float64(l.churn)/float64(total)*100 + 0.5)
-		filled = int(float64(l.churn)/float64(total)*float64(barW) + 0.5)
+		pct = int(float64(value)/float64(total)*100 + 0.5)
+		filled = int(float64(value)/float64(total)*float64(barW) + 0.5)
 	}
 	if filled > barW {
 		filled = barW
 	}
-	bar := metaStyle.Render(strings.Repeat("█", filled)) + borderStyle.Render(strings.Repeat("░", barW-filled))
-	name := truncateText(l.name, 16)
+	bar := fill.Render(strings.Repeat("█", filled)) + borderStyle.Render(strings.Repeat("░", barW-filled))
+	name := truncateText(label, 16)
 	return "  " + padRight(name, 16) + " " + bar + mutedStyle.Render(fmt.Sprintf(" %3d%%", pct))
 }
 
