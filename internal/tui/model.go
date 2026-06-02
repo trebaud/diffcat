@@ -264,6 +264,28 @@ func (m *model) rebuildTree() {
 	if m.cursor < 0 {
 		m.cursor = 0
 	}
+	m.snapCursorToFile()
+}
+
+// snapCursorToFile nudges the tree cursor off a folder row onto the nearest file
+// row (scanning forward first, then backward), so the cursor always rests on a
+// file with a real diff rather than a folder that would show an empty pane.
+func (m *model) snapCursorToFile() {
+	if r := m.selectedRow(); r == nil || !r.isDir {
+		return
+	}
+	for i := m.cursor; i < len(m.rows); i++ {
+		if m.rows[i].file != nil {
+			m.cursor = i
+			return
+		}
+	}
+	for i := m.cursor - 1; i >= 0; i-- {
+		if m.rows[i].file != nil {
+			m.cursor = i
+			return
+		}
+	}
 }
 
 // selectedRow returns the row under the cursor, or nil when the tree is empty.
@@ -272,16 +294,6 @@ func (m model) selectedRow() *treeRow {
 		return &m.rows[m.cursor]
 	}
 	return nil
-}
-
-// toggleCollapse folds or unfolds the directory under the cursor and rebuilds.
-func (m *model) toggleCollapse() {
-	r := m.selectedRow()
-	if r == nil || !r.isDir {
-		return
-	}
-	m.collapsed[r.path] = !m.collapsed[r.path]
-	m.rebuildTree()
 }
 
 func (m model) Init() tea.Cmd { return tea.Batch(tickCmd(), syncCmd(m.repo, m.baseName)) }

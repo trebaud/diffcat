@@ -1032,11 +1032,11 @@ func (m model) footerView() string {
 		}
 	case viewCommit:
 		keys = []string{
-			"j/k move", "h/l ⇄ pane", "↵ open/fold", "f find", "/ search", "d details", "[ ] sidebar", "s split", "t theme", "esc back", "? help", "q quit",
+			"j/k move", "h/l ⇄ pane", "↵ open", "f find", "/ search", "d details", "[ ] sidebar", "s split", "t theme", "esc back", "? help", "q quit",
 		}
 	default:
 		keys = []string{
-			"j/k move", "h/l ⇄ pane", "↵ open/fold/expand", "f find", "/ search", "[ ] sidebar", "S overview", "s split", "t theme", "L history", "? help", "q quit",
+			"j/k move", "h/l ⇄ pane", "↵ open/expand", "f find", "/ search", "[ ] sidebar", "S overview", "s split", "t theme", "L history", "? help", "q quit",
 		}
 	}
 	footer := mutedStyle.Render(strings.Join(keys, "  ·  "))
@@ -1061,7 +1061,7 @@ func (m model) helpBox() string {
 		headingStyle.Render("  panes"),
 		"  h / l        focus file list / diff pane",
 		"  Tab          toggle focused pane",
-		"  Enter / o    open file's diff / fold a folder / expand context",
+		"  Enter / o    open file's diff / expand context",
 		"  f            fuzzy-jump to a changed file by name",
 		"  [ / ]        collapse / widen the sidebar (full-width diff ↔ wide list)",
 		"",

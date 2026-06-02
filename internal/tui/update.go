@@ -349,12 +349,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// On a folder: fold/unfold it. On a file: open its diff and move into
-		// the diff pane.
-		if r := m.selectedRow(); r != nil && r.isDir {
-			m.toggleCollapse()
-			return m, nil
-		}
+		// On a file row: open its diff and move into the diff pane. (The tree
+		// cursor only ever rests on files — folder rows are skipped by j/k — so
+		// there's no folder-fold case to handle here.)
 		m.focus = focusDiff
 		return m, nil
 
@@ -453,6 +450,7 @@ func (m *model) gotoTop() {
 		m.loadCommitDiff()
 	default:
 		m.cursor = 0
+		m.snapCursorToFile()
 		m.loadDiff()
 	}
 }
@@ -469,6 +467,7 @@ func (m *model) gotoBottom() {
 		m.loadCommitDiff()
 	default:
 		m.cursor = max(0, len(m.rows)-1)
+		m.snapCursorToFile()
 		m.loadDiff()
 	}
 }
@@ -497,18 +496,37 @@ func (m *model) expandUnderCursor(l diff.Line) {
 	m.rebuildView()
 }
 
+// moveCursor steps the tree cursor by delta, skipping folder rows so j/k always
+// land on a file with a real diff. The step direction (sign of delta) is also the
+// scan direction: a `j` onto a folder keeps moving down to the next file, a `k`
+// keeps moving up. If no file lies that way, the cursor stays put.
 func (m *model) moveCursor(delta int) {
-	if len(m.files) == 0 {
+	if len(m.files) == 0 || delta == 0 {
 		return
 	}
-	m.cursor += delta
-	if m.cursor < 0 {
-		m.cursor = 0
+	step := 1
+	if delta < 0 {
+		step = -1
 	}
-	if m.cursor >= len(m.rows) {
-		m.cursor = len(m.rows) - 1
+	i := m.cursor
+	for n := abs(delta); n > 0; {
+		i += step
+		if i < 0 || i >= len(m.rows) {
+			break
+		}
+		if m.rows[i].file != nil {
+			m.cursor = i
+			n--
+		}
 	}
 	m.loadDiff()
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 // refresh recomputes the base and reloads the changed-file list from disk so the
