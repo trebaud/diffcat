@@ -1081,7 +1081,7 @@ func (m model) helpBox() string {
 		"  d            inspect the selected commit (author, date, full message)",
 		"  ○ local      the working tree: staged + unstaged changes",
 		"  L            return to the history view from anywhere",
-		"  Esc          step back: commit tree → history; quit from history",
+		"  Esc          step back one level (commit tree → history)",
 		"",
 		headingStyle.Render("  branch diff"),
 		"  D            aggregated branch-vs-base diff (file tree + diff)",

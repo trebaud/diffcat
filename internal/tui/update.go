@@ -177,22 +177,19 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "esc":
-		// Esc steps back one level toward the history view (the default): a
+		// Esc only steps back one level toward the history view (the default): a
 		// per-commit (or working-tree) drill-in → the history list; the branch
 		// overview → the branch diff → the history list. On the history view, the
-		// home screen, it quits.
+		// home screen, it does nothing — use q / ctrl+c to quit.
 		switch m.mode {
 		case viewCommit:
 			m.exitCommit()
-			return m, nil
 		case viewBranch:
 			m.enterLog()
-			return m, nil
 		case viewOverview:
 			m.exitOverview()
-			return m, nil
 		}
-		return m, tea.Quit
+		return m, nil
 
 	case "L":
 		// Return to the commit-history view (the default). From a per-commit tree,
@@ -369,18 +366,18 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.gotoBottom()
 		return m, nil
 
-	// --- diff paging (always moves the diff cursor by a page) ---
+	// --- paging: half/full page through the focused pane ---
 	case "ctrl+d":
-		m.moveDiffCursor(m.diffViewportHeight() / 2)
+		m.pageFocused(m.diffViewportHeight() / 2)
 		return m, nil
 	case "ctrl+u":
-		m.moveDiffCursor(-m.diffViewportHeight() / 2)
+		m.pageFocused(-m.diffViewportHeight() / 2)
 		return m, nil
 	case "ctrl+f", "pgdown", " ":
-		m.moveDiffCursor(m.diffViewportHeight())
+		m.pageFocused(m.diffViewportHeight())
 		return m, nil
 	case "ctrl+b", "pgup":
-		m.moveDiffCursor(-m.diffViewportHeight())
+		m.pageFocused(-m.diffViewportHeight())
 		return m, nil
 	}
 	return m, nil
@@ -470,6 +467,17 @@ func (m *model) gotoBottom() {
 		m.snapCursorToFile()
 		m.loadDiff()
 	}
+}
+
+// pageFocused steps the focused pane by delta rows for the half/full-page keys.
+// In the commit-history list it pages the commit selection (like j/k there);
+// everywhere else it scrolls the diff pane.
+func (m *model) pageFocused(delta int) {
+	if m.mode == viewLog && m.focus == focusFiles {
+		m.moveCommitCursor(delta)
+		return
+	}
+	m.moveDiffCursor(delta)
 }
 
 // moveDiffCursor moves the diff-pane line cursor and scrolls to keep it visible.
