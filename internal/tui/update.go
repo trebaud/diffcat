@@ -251,15 +251,16 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// --- sidebar collapse / expand (`[` narrows toward hidden, `]` widens) ---
 	case "]":
 		// Widen the sidebar: hidden → normal → wide. A wide sidebar surfaces extra
-		// commit metadata (author, date, tags) in the history list.
-		if m.mode != viewOverview && m.sidebar < sidebarWide {
+		// commit metadata (author, date, tags) in the history list. Disabled in the
+		// commit-history view, where the sidebar is pinned to ~half the pane.
+		if m.mode != viewOverview && m.mode != viewLog && m.sidebar < sidebarWide {
 			m.sidebar++
 		}
 		return m, nil
 	case "[":
 		// Narrow the sidebar: wide → normal → hidden. Collapsing fully hands the
 		// whole width to the diff, so move focus there since the list is gone.
-		if m.mode != viewOverview && m.sidebar > sidebarHidden {
+		if m.mode != viewOverview && m.mode != viewLog && m.sidebar > sidebarHidden {
 			m.sidebar--
 			if m.sidebar == sidebarHidden {
 				m.focus = focusDiff

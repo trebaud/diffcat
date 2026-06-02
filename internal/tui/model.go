@@ -447,6 +447,18 @@ func (m model) listViewportHeight() int {
 // trades the diff some room for the commit list's extra metadata, but is clamped
 // so the diff never drops below a readable minimum.
 func (m model) sidebarWidth() int {
+	// The commit-history view pins the sidebar to ~half the pane: the commit list
+	// is the primary content there, so it's neither collapsible nor resizable.
+	if m.mode == viewLog {
+		w := m.width / 2
+		if maxW := m.width - 1 - 28; w > maxW {
+			w = maxW
+		}
+		if w < 22 {
+			w = 22
+		}
+		return w
+	}
 	switch m.sidebar {
 	case sidebarHidden:
 		return 0

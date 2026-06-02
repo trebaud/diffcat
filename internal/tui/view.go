@@ -359,7 +359,7 @@ func (m model) commitRow(c git.Commit, selected bool, width int) string {
 	if c.IsMerge() {
 		glyph = "◆"
 	}
-	if m.sidebar == sidebarWide {
+	if m.sidebar == sidebarWide || m.mode == viewLog {
 		return m.commitRowWide(c, glyph, selected, width)
 	}
 	head := glyph + " " + c.Short + " "
@@ -1028,7 +1028,7 @@ func (m model) footerView() string {
 		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewLog:
 		keys = []string{
-			"j/k select", "h/l ⇄ pane", "↵ open", "d details", "[ ] sidebar", "s split", "t theme", "L/esc back", "? help", "q quit",
+			"j/k select", "h/l ⇄ pane", "↵ open", "d details", "s split", "t theme", "L/esc back", "? help", "q quit",
 		}
 	case viewCommit:
 		keys = []string{
