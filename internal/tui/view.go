@@ -1028,7 +1028,7 @@ func (m model) footerView() string {
 		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewLog:
 		keys = []string{
-			"j/k select", "h/l ⇄ pane", "↵ open", "d details", "s split", "t theme", "L/esc back", "? help", "q quit",
+			"j/k select", "h/l ⇄ pane", "↵ open", "D branch diff", "d details", "s split", "t theme", "? help", "q quit",
 		}
 	case viewCommit:
 		keys = []string{
@@ -1075,16 +1075,19 @@ func (m model) helpBox() string {
 		"  ↵ / o on  ↕  expand hidden context (↓ below, ↑ above)",
 		"  /            search the open diff (n / N jump between matches)",
 		"",
-		headingStyle.Render("  history"),
-		"  L            toggle the commit-history view",
-		"  j / k        (in history) move between entries, preview each diff",
-		"  Enter        (in history) open the commit's (or working tree's) files",
+		headingStyle.Render("  history (the default view)"),
+		"  j / k        move between entries, preview each diff",
+		"  Enter        open the commit's (or working tree's) files",
 		"  d            inspect the selected commit (author, date, full message)",
-		"  ○ local      (in history) the working tree: staged + unstaged changes",
-		"  Esc          step back: commit tree → history → branch diff",
+		"  ○ local      the working tree: staged + unstaged changes",
+		"  L            return to the history view from anywhere",
+		"  Esc          step back: commit tree → history; quit from history",
+		"",
+		headingStyle.Render("  branch diff"),
+		"  D            aggregated branch-vs-base diff (file tree + diff)",
+		"  S            toggle the branch overview (churn bars + languages)",
 		"",
 		headingStyle.Render("  view"),
-		"  S            toggle the branch overview (churn bars + languages)",
 		"  s            toggle unified / side-by-side",
 		"  t            toggle light / dark theme",
 		"  r            refresh from disk (also auto-syncs in the background)",

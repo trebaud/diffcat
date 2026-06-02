@@ -177,14 +177,16 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "esc":
-		// Esc steps back one level: a per-commit (or working-tree) drill-in → the
-		// history list → the default branch diff; on the default view it quits.
+		// Esc steps back one level toward the history view (the default): a
+		// per-commit (or working-tree) drill-in → the history list; the branch
+		// overview → the branch diff → the history list. On the history view, the
+		// home screen, it quits.
 		switch m.mode {
 		case viewCommit:
 			m.exitCommit()
 			return m, nil
-		case viewLog:
-			m.exitLog()
+		case viewBranch:
+			m.enterLog()
 			return m, nil
 		case viewOverview:
 			m.exitOverview()
@@ -193,15 +195,32 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "L":
-		// Toggle the commit-history view. From a per-commit tree, step back to
-		// the history list (Esc's first stop) rather than all the way out.
+		// Return to the commit-history view (the default). From a per-commit tree,
+		// step back to the history list rather than reloading from scratch.
 		switch m.mode {
 		case viewLog:
-			m.exitLog()
+			// already in history
 		case viewCommit:
 			m.exitCommit()
 		default:
 			m.enterLog()
+		}
+		return m, nil
+
+	case "D":
+		// Open the aggregated branch-vs-base diff (the file tree + diff). From a
+		// per-commit/working-tree drill-in, restore the branch tree on the way; from
+		// the overview, drop back to the diff it summarizes.
+		switch m.mode {
+		case viewBranch:
+			// already showing the branch diff
+		case viewCommit:
+			m.exitCommit()
+			m.exitLog()
+		case viewOverview:
+			m.exitOverview()
+		default:
+			m.exitLog()
 		}
 		return m, nil
 

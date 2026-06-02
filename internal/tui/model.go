@@ -19,9 +19,10 @@ const (
 	focusDiff                   // right: the unified diff
 )
 
-// viewMode selects the screen layout. viewBranch is the default file-tree/diff
-// view; viewLog replaces the left pane with the branch's commit history and the
-// right pane with the highlighted commit's full diff.
+// viewMode selects the screen layout. viewLog is the default view — the left
+// pane lists the branch's commit history and the right pane shows the
+// highlighted commit's full diff; viewBranch (reached with `D`) swaps in the
+// aggregated branch-vs-base file tree and the selected file's diff.
 type viewMode int
 
 const (
@@ -47,7 +48,7 @@ const (
 // is tracked manually via diffOffset rather than a viewport component, matching
 // the rest of the rendering which is hand-laid-out.
 type model struct {
-	mode     viewMode    // viewBranch (file/diff) or viewLog (history)
+	mode     viewMode    // viewLog (history, default) or viewBranch (file/diff)
 	focus    focusPane   // pane that j/k/gg/G operate on
 	sidebar  sidebarSize // left-pane width: hidden / normal / wide (`[` / `]`)
 	pendingG bool        // first half of the `gg` chord was pressed
@@ -193,12 +194,10 @@ func newModel(repo, base, baseName string, baseIsDefault bool, branch string, fi
 	}
 	m.rebuildTree()
 	m.loadDiff()
-	// With no working-tree changes the branch diff is empty (e.g. a clean
-	// checkout of the default branch), so open straight into the commit history
-	// — that's the only thing worth looking at.
-	if len(files) == 0 {
-		m.enterLog()
-	}
+	// diffcat always opens on the branch's commit history — the timeline of what
+	// changed, on the default branch or a feature branch alike. The aggregated
+	// branch-vs-base diff (the file tree + diff) is one `D` away.
+	m.enterLog()
 	return m
 }
 

@@ -74,8 +74,8 @@ func (m *model) enterLog() {
 	m.loadCommitDiff()
 }
 
-// exitLog returns to the default branch-vs-base view, restoring the diff for the
-// file under the tree cursor.
+// exitLog leaves the history view for the aggregated branch-vs-base diff (the
+// `D` view), restoring the diff for the file under the tree cursor.
 func (m *model) exitLog() {
 	m.mode = viewBranch
 	m.focus = focusFiles
