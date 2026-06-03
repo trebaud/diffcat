@@ -170,7 +170,7 @@ func (m model) headerView() string {
 	left := titleStyle.Render("diffcat")
 	if m.mode == viewLog {
 		mid := mutedStyle.Render(fmt.Sprintf("  %s · history", branchLabel(m.branch)))
-		count := "  " + headingStyle.Render(fmt.Sprintf("%d commits", len(m.commits)))
+		count := "  " + headingStyle.Render(fmt.Sprintf("%d commits", m.featureCommitCount()))
 		return left + mid + count
 	}
 	if m.mode == viewOverview {
@@ -287,12 +287,16 @@ func (m model) listView(width int) string {
 }
 
 // commitListView renders the left pane in history mode: the branch's commits
-// (base..HEAD), newest first, as a scrollable selectable list.
+// (base..HEAD), newest first, as a scrollable selectable list. When the branch
+// forked from a base, the base branch's own commits follow below a labeled
+// divider so the split between "this branch" and "what it branched from" is clear.
 func (m model) commitListView(width int) string {
 	rows := m.listViewportHeight()
 	var b strings.Builder
 
-	b.WriteString(m.paneHeading(fmt.Sprintf("History (%d)", len(m.commits)), focusFiles))
+	// The header counts the branch's own commits; the base history below the
+	// divider is context, not part of "what this branch added".
+	b.WriteString(m.paneHeading(fmt.Sprintf("History (%d)", m.featureCommitCount()), focusFiles))
 	b.WriteString("\n")
 
 	total := m.logRowCount()
@@ -321,11 +325,34 @@ func (m model) commitListView(width int) string {
 			if m.logWorking {
 				ci--
 			}
+			// Draw the divider just above the first base-branch commit so the
+			// branch's own commits read as one group and the base as another. The
+			// rail (│) carries down through the gap and tees into the divider, so
+			// the line stays connected across the two groups.
+			if ci == m.baseStart {
+				b.WriteString(mutedStyle.Render("│"))
+				b.WriteString("\n")
+				b.WriteString(commitDivider(m.baseName, width))
+				b.WriteString("\n")
+			}
 			b.WriteString(m.commitRow(m.commits[ci], sel, width))
 		}
 		b.WriteString("\n")
 	}
 	return lipgloss.NewStyle().Width(width).Render(b.String())
+}
+
+// commitDivider renders the labeled rule that separates the branch's own commits
+// from the base branch's history below them, e.g. "├─ main ──────────". The rule
+// is muted so it reads as structure, while the base branch name is bold so it
+// stays legible against any theme.
+func commitDivider(label string, width int) string {
+	lead, name := "├─ ", label+" "
+	fill := width - lipgloss.Width(lead) - lipgloss.Width(name)
+	if fill < 0 {
+		fill = 0
+	}
+	return mutedStyle.Render(lead) + metaStyle.Render(label) + mutedStyle.Render(" "+strings.Repeat("─", fill))
 }
 
 // workingRow renders the synthetic "working tree" entry pinned atop the history

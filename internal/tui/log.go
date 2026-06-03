@@ -12,6 +12,16 @@ import (
 // diff pipeline. Rendering lives in view.go (commitListView); the right pane
 // reuses the same diff renderer the branch view uses.
 
+// featureCommitCount is the number of the branch's own commits (base..HEAD) —
+// the ones above the base-branch divider. It excludes the base history shown
+// below the divider for context, so headings count "what this branch added".
+func (m model) featureCommitCount() int {
+	if m.baseStart >= 0 {
+		return m.baseStart
+	}
+	return len(m.commits)
+}
+
 // logRowCount is the number of selectable rows in the history list: the commits
 // plus the optional leading "working tree" entry.
 func (m model) logRowCount() int {
@@ -159,13 +169,21 @@ func (m *model) exitCommit() {
 	m.loadCommitDiff()
 }
 
-// loadCommits (re)reads base..HEAD and drops the per-commit diff cache so a
-// refresh reflects new history.
+// baseHistoryLimit caps how many of the base branch's commits are shown below
+// the branch's own commits — enough to give context for where the branch forked
+// from without dragging in the whole history of a long-lived base like main.
+const baseHistoryLimit = 30
+
+// loadCommits (re)reads the branch's commits plus a slice of the base branch's
+// history below them (recording the boundary in baseStart) and drops the
+// per-commit diff cache so a refresh reflects new history.
 func (m *model) loadCommits() {
-	if cs, err := git.Commits(m.repo, m.base); err == nil {
+	if cs, start, err := git.BranchHistory(m.repo, m.base, baseHistoryLimit); err == nil {
 		m.commits = cs
+		m.baseStart = start
 	} else {
 		m.commits = nil
+		m.baseStart = -1
 	}
 	m.commitDiffCache = map[string][]diff.Line{}
 }

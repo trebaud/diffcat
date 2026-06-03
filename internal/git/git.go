@@ -159,15 +159,43 @@ func Commits(repo, base string) ([]Commit, error) {
 	return commits, nil
 }
 
-// commitLog runs `git log` over revRange and parses the result.
-func commitLog(repo, revRange string) ([]Commit, error) {
+// BranchHistory returns the history to show in the log view as a single slice
+// newest-first, together with baseStart, the index at which the base branch's
+// own commits begin so the view can draw a delineation there.
+//
+// On a feature branch the slice is the branch's commits (base..HEAD) followed by
+// the base branch's commits at and before the fork point (base and older, capped
+// at limit), and baseStart marks the first of those — the boundary between "what
+// this branch added" and "what it branched from". When HEAD sits on the base
+// branch itself there is nothing to delineate: the slice is HEAD's full history
+// and baseStart is -1.
+func BranchHistory(repo, base string, limit int) (commits []Commit, baseStart int, err error) {
+	own, err := commitLog(repo, base+"..HEAD")
+	if err != nil {
+		return nil, -1, err
+	}
+	if len(own) == 0 {
+		full, err := commitLog(repo, "HEAD")
+		return full, -1, err
+	}
+	baseHist, err := commitLog(repo, fmt.Sprintf("--max-count=%d", limit), base)
+	if err != nil || len(baseHist) == 0 {
+		return own, -1, err
+	}
+	return append(own, baseHist...), len(own), nil
+}
+
+// commitLog runs `git log` with the given trailing args (a rev-range and any
+// limiting flags) and parses the result.
+func commitLog(repo string, args ...string) ([]Commit, error) {
 	// Unit/record separators (US 0x1f / RS 0x1e) frame the fields so subjects
 	// with spaces or punctuation parse unambiguously. The body (%b) is last so
 	// its embedded newlines can't be mistaken for a field separator. %D carries
 	// the ref decoration (branches/tags) — the ref-name placeholders populate
 	// regardless of --decorate, so tags resolve without an extra git call.
 	const format = "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%ad%x1f%P%x1f%D%x1f%s%x1f%b%x1e"
-	out, err := exec.Command("git", "-C", repo, "log", "--no-color", "--date=format:%Y-%m-%d %H:%M", format, revRange).Output()
+	argv := append([]string{"-C", repo, "log", "--no-color", "--date=format:%Y-%m-%d %H:%M", format}, args...)
+	out, err := exec.Command("git", argv...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("git log failed: %w", err)
 	}

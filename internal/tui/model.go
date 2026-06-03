@@ -79,6 +79,12 @@ type model struct {
 	commitCursor    int
 	commitDiffCache map[string][]diff.Line
 
+	// baseStart is the index in commits where the base branch's own history
+	// begins (the commits this branch forked from), or -1 when there's nothing
+	// to delineate — e.g. HEAD sits on the base branch. The list renders a
+	// divider before this row to separate branch commits from base commits.
+	baseStart int
+
 	// logWorking is true when the history list shows a synthetic "working tree"
 	// entry pinned above the commits (i.e. there are uncommitted changes). When
 	// set, commitCursor 0 selects that entry rather than a commit, so the list
@@ -215,6 +221,7 @@ func newModel(repo, base, baseName string, baseIsDefault bool, branch string, fi
 		files:           files,
 		collapsed:       map[string]bool{},
 		commitDiffCache: map[string][]diff.Line{},
+		baseStart:       -1,
 		dark:            dark,
 		syncFingerprint: git.Fingerprint(repo, baseName),
 		fileSig:         fileSignatures(files),
