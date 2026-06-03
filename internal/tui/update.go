@@ -298,9 +298,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// the overview, drop back to the branch diff it (or its origin) summarizes.
 		// On the base branch the diff is degenerate (merge base = HEAD), so the key
 		// is inert — matching the hidden footer/help hint — and the reader stays put.
-		// Not offered from the commit-history view either, where per-commit previews
-		// are the point; the branch diff is reachable from the commit views instead.
-		if m.onBaseBranch() || m.mode == viewLog {
+		if m.onBaseBranch() {
 			return m, nil
 		}
 		switch m.mode {
