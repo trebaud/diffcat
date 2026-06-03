@@ -43,6 +43,28 @@ func syncCmd(repo, baseName string) tea.Cmd {
 	})
 }
 
+// authorshipMsg carries the result of a background authorship computation. The
+// split shells `git log --numstat` over the whole range (the full history when
+// HEAD sits on the base), which can take a second or two — so it runs off the UI
+// thread and lands here rather than blocking the dashboard open.
+type authorshipMsg struct{ shares []git.AuthorShare }
+
+// authorshipCmd computes the AI/human split in the background.
+func authorshipCmd(repo, base string) tea.Cmd {
+	return func() tea.Msg { return authorshipMsg{shares: git.Authorship(repo, base)} }
+}
+
+// ensureAuthorship kicks the background authorship computation when the branch
+// split isn't already computed or in flight, returning the command to run (nil
+// when there's nothing to do). The result arrives as an authorshipMsg.
+func (m *model) ensureAuthorship() tea.Cmd {
+	if m.authorComputed || m.authorComputing {
+		return nil
+	}
+	m.authorComputing = true
+	return authorshipCmd(m.repo, m.base)
+}
+
 // Update is the Elm update function — it maps a message to the next model and
 // any side effects.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -95,6 +117,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickCmd(interval)
 
+	case authorshipMsg:
+		m.authorShares = msg.shares
+		m.authorComputed = true
+		m.authorComputing = false
+		return m, nil
+
 	case gitStateMsg:
 		// Only do the (more expensive) refresh when the cheap fingerprint moved;
 		// otherwise the poll is a no-op beyond re-arming itself.
@@ -102,7 +130,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncFingerprint = msg.fingerprint
 			m.refresh()
 		}
-		return m, syncCmd(m.repo, m.baseName)
+		sync := syncCmd(m.repo, m.baseName)
+		// refresh invalidated the split; recompute it live only while the branch
+		// dashboard is open (where it's on screen), else leave it for the next open.
+		if m.mode == viewOverview && m.overviewCommit == nil {
+			return m, tea.Batch(sync, m.ensureAuthorship())
+		}
+		return m, sync
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -306,6 +340,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.refresh()
 		m.syncFingerprint = git.Fingerprint(m.repo, m.baseName)
+		if m.mode == viewOverview && m.overviewCommit == nil {
+			return m, m.ensureAuthorship()
+		}
 		return m, nil
 
 	case "S":
@@ -318,9 +355,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case viewOverview:
 			m.exitOverview()
 		case viewBranch:
-			m.enterOverview()
+			return m, m.enterOverview()
 		case viewLog, viewCommit:
-			m.enterCommitOverview()
+			return m, m.enterCommitOverview()
 		}
 		return m, nil
 
@@ -621,6 +658,7 @@ func (m *model) refresh() {
 	m.base = git.BaseRef(m.repo, m.baseName)
 	m.shortstat = git.Shortstat(m.repo, m.base)
 	m.authorComputed = false // recompute the human/AI split against the new base
+	m.authorComputing = false
 
 	if m.mode == viewOverview && m.overviewCommit != nil {
 		// A commit overview summarizes an immutable commit; leave the underlying

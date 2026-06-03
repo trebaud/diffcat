@@ -56,26 +56,32 @@ func (m model) overviewBody(width, height int) []string {
 		}
 	}
 	if c := m.overviewCommit; c != nil {
-		// A single commit's churn is all one class, so the split is trivially
-		// 100/0: when an AI agent signed it, name the agent at 100% over an empty
-		// Human row; otherwise it's all Human.
+		// A single commit's churn is all one class, so the split is trivially 100%:
+		// name the AI agent that signed it, else it's all Human — a single row
+		// either way (no point pairing a "Human 0%" filler under the agent).
 		top = append(top, padLine("", width), padLine(headingStyle.Render("  Authored by"), width))
 		if agent := c.AIAgent(); agent != "" {
-			top = append(top,
-				padLine(shareRow(agent, 1, 1, titleStyle), width),
-				padLine(shareRow("Human", 0, 1, addedStyle), width))
+			top = append(top, padLine(shareRow(agent, 1, 1, titleStyle), width))
 		} else {
 			top = append(top, padLine(shareRow("Human", 1, 1, addedStyle), width))
 		}
 	} else if total := authorTotal(m.authorShares); total > 0 {
 		top = append(top, padLine("", width), padLine(headingStyle.Render("  Authored by"), width))
 		for _, s := range m.authorShares {
+			// Skip agents whose churn rounds to 0% — a stray co-author line or a
+			// handful of edits shouldn't litter the split with empty bars.
+			if sharePct(s.Churn, total) == 0 {
+				continue
+			}
 			style := titleStyle
 			if s.Name == "Human" {
 				style = addedStyle
 			}
 			top = append(top, padLine(shareRow(s.Name, s.Churn, total, style), width))
 		}
+	} else if m.authorComputing {
+		top = append(top, padLine("", width), padLine(headingStyle.Render("  Authored by"), width),
+			padLine(mutedStyle.Render("  analyzing commit history…"), width))
 	}
 
 	top = append(top, padLine("", width),
@@ -143,6 +149,16 @@ func (m model) overviewSummary() string {
 		"   " + stat + "   " + tail
 }
 
+// sharePct is value as a rounded whole percentage of total (0 when total is 0).
+// It's the number the share bars print, and the test the Authorship rows use to
+// drop agents whose churn rounds to 0% — see overviewBody.
+func sharePct(value, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	return int(float64(value)/float64(total)*100 + 0.5)
+}
+
 // authorTotal sums the churn across authorship buckets — the denominator for the
 // "Authored by" share bars.
 func authorTotal(shares []git.AuthorShare) int {
@@ -164,9 +180,8 @@ func (m model) langRow(l langStat, total, width int) string {
 // percentage. It's the shared shape behind the Languages and Authorship rows.
 func shareRow(label string, value, total int, fill lipgloss.Style) string {
 	const barW = 12
-	pct, filled := 0, 0
+	pct, filled := sharePct(value, total), 0
 	if total > 0 {
-		pct = int(float64(value)/float64(total)*100 + 0.5)
 		filled = int(float64(value)/float64(total)*float64(barW) + 0.5)
 	}
 	if filled > barW {

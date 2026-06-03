@@ -3,6 +3,8 @@ package tui
 import (
 	"sort"
 
+	tea "charm.land/bubbletea/v2"
+
 	"github.com/trebaud/diffcat/internal/git"
 )
 
@@ -14,14 +16,13 @@ import (
 // overview_view.go.
 
 // enterOverview switches into the branch-vs-base dashboard. Commits are loaded
-// (if not already) so the summary can show the branch's commit count.
-func (m *model) enterOverview() {
+// (if not already) so the summary can show the branch's commit count. The
+// AI/human split can scan the whole history, so it's computed in the background
+// (see ensureAuthorship) and the returned command fills in the bars when ready —
+// the dashboard opens instantly meanwhile.
+func (m *model) enterOverview() tea.Cmd {
 	if len(m.commits) == 0 {
 		m.loadCommits()
-	}
-	if !m.authorComputed {
-		m.authorShares = git.Authorship(m.repo, m.base)
-		m.authorComputed = true
 	}
 	m.overviewCommit = nil
 	m.overviewCommitFiles = nil
@@ -29,6 +30,7 @@ func (m *model) enterOverview() {
 	m.mode = viewOverview
 	m.focus = focusFiles
 	m.overviewCursor = 0
+	return m.ensureAuthorship()
 }
 
 // enterCommitOverview opens the dashboard scoped to a single commit: it
@@ -41,13 +43,13 @@ func (m *model) enterOverview() {
 // working-tree drill-in), there's nothing to scope to, so it falls back to the
 // branch-wide summary — including the AI/human split chart — still returning to
 // the view it was opened from.
-func (m *model) enterCommitOverview() {
+func (m *model) enterCommitOverview() tea.Cmd {
 	c := m.detailsCommit()
 	if c == nil {
 		origin := m.mode
-		m.enterOverview()
+		cmd := m.enterOverview()
 		m.overviewReturn = origin
-		return
+		return cmd
 	}
 	files, err := git.CommitFiles(m.repo, c.SHA)
 	if err != nil {
@@ -59,6 +61,7 @@ func (m *model) enterCommitOverview() {
 	m.mode = viewOverview
 	m.focus = focusFiles
 	m.overviewCursor = 0
+	return nil
 }
 
 // exitOverview leaves the dashboard for the view it was opened from: the

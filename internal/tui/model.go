@@ -202,9 +202,13 @@ type model struct {
 	// Authorship split for the overview: committed churn bucketed by author class
 	// — one entry per named AI agent plus "Human" (git.Authorship). Computed lazily
 	// on first entry and invalidated by refresh, so it doesn't shell `git log` on
-	// every dashboard open.
-	authorShares   []git.AuthorShare
-	authorComputed bool
+	// every dashboard open. The computation can scan the whole history (when HEAD
+	// sits on the base), so it runs in the background — authorComputing guards a
+	// poll in flight so the dashboard opens instantly and the bars fill in when the
+	// authorshipMsg lands.
+	authorShares    []git.AuthorShare
+	authorComputed  bool
+	authorComputing bool
 
 	err error
 }
