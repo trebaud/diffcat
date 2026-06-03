@@ -159,8 +159,14 @@ type model struct {
 	// adds a signature the path is marked unseen, and opening its diff (loadDiff)
 	// clears it. Seeded at construction from the initial change set, so only drift
 	// since launch is flagged — not the files already on screen.
-	fileSig map[string]string
-	unseen  map[string]bool
+	//
+	// unseenAt records the animFrame each path was (re)flagged, driving a one-shot
+	// highlight that sweeps across the file name the moment it changes — a brief,
+	// clear "this just changed" cue that then clears itself, leaving the quieter
+	// glyph pulse to carry on until the diff is opened.
+	fileSig  map[string]string
+	unseen   map[string]bool
+	unseenAt map[string]int
 
 	// syncFingerprint is the git state as of the last background poll (see
 	// git.Fingerprint). The poll recomputes it off the UI thread; when it differs
@@ -236,6 +242,7 @@ func newModel(repo, base, baseName string, baseIsDefault bool, branch string, fi
 		syncFingerprint: git.Fingerprint(repo, baseName),
 		fileSig:         fileSignatures(files),
 		unseen:          map[string]bool{},
+		unseenAt:        map[string]int{},
 	}
 	m.rebuildTree()
 	m.loadDiff()
@@ -271,6 +278,9 @@ func (m *model) flagChangedFiles() {
 	if m.unseen == nil {
 		m.unseen = map[string]bool{}
 	}
+	if m.unseenAt == nil {
+		m.unseenAt = map[string]int{}
+	}
 	selPath := ""
 	if f := m.selectedFile(); f != nil {
 		selPath = f.Path
@@ -284,11 +294,15 @@ func (m *model) flagChangedFiles() {
 		}
 		if prev, ok := m.fileSig[f.Path]; !ok || prev != sig {
 			m.unseen[f.Path] = true
+			// Restart the name sweep from the current frame: a fresh change (or a
+			// change that grew again) replays the cue.
+			m.unseenAt[f.Path] = m.animFrame
 		}
 	}
 	for p := range m.unseen {
 		if _, ok := next[p]; !ok {
 			delete(m.unseen, p)
+			delete(m.unseenAt, p)
 		}
 	}
 	m.fileSig = next
@@ -378,6 +392,7 @@ func (m *model) loadDiff() {
 	}
 	// Opening a file's diff counts as seeing it: stop its tree row from pulsing.
 	delete(m.unseen, f.Path)
+	delete(m.unseenAt, f.Path)
 	m.lexer = lexerFor(f.Path)
 	var raw string
 	switch {

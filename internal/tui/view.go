@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"image/color"
+	"math"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -559,10 +560,15 @@ func (m model) treeRow(r treeRow, selected bool, width int) string {
 	}
 	// A file a sync changed (and the reader hasn't opened) gently breathes its
 	// status glyph through the pulse ramp — a quiet dim→bright→dim ease, not a
-	// blink. The name is left alone so the cue stays subtle; the pulse stops the
-	// moment its diff is opened (loadDiff clears the flag).
+	// blink. The pulse persists until its diff is opened (loadDiff clears the flag).
+	// On top of that, the instant a change lands a bright highlight sweeps once
+	// across the name — a clear "this just changed" cue that then clears itself,
+	// leaving the quieter glyph pulse to carry on.
 	if !r.isDir && m.unseen[r.path] {
 		glyphStyled = lipgloss.NewStyle().Foreground(pulseShade(m.animFrame)).Bold(true).Render(glyph)
+		if swept, live := shimmerName(name, m.animFrame-m.unseenAt[r.path]); live {
+			nameStyled = swept
+		}
 	}
 
 	stats := mutedStyle.Render(statsPlain)
@@ -617,6 +623,65 @@ func pulseShade(frame int) color.Color {
 		p = period - p // fold the back half into a triangle
 	}
 	return pulseRamp[p]
+}
+
+// shimmerName paints a one-shot highlight that sweeps left→right across a freshly
+// changed file's name, then leaves the text plain. age is animFrames since the
+// file was flagged unseen; a soft bright band rides the pulse ramp and travels a
+// little past the last rune so the tail flashes too, after which the sweep is done
+// — the glyph keeps breathing, but the name rests. Only ever brightens (never
+// dims below the plain text), so the cue reads as a passing glint. Returns
+// (styled, true) while the sweep is live, and (_, false) once it has cleared.
+func shimmerName(name string, age int) (string, bool) {
+	if age < 0 {
+		age = 0
+	}
+	runes := []rune(name)
+	n := len(runes)
+	if n == 0 {
+		return name, false
+	}
+	const (
+		band  = 3.0 // half-width of the bright sweep, in cells (wide enough to overlap frame-to-frame)
+		speed = 1.4 // cells the head advances per animFrame (~6.7fps → a ~1.5s glint)
+	)
+	head := float64(age) * speed
+	if head-band > float64(n-1) {
+		return name, false // the band has cleared the last rune
+	}
+	var b strings.Builder
+	for i, r := range runes {
+		t := 1 - math.Abs(float64(i)-head)/band // 1 at the head, 0 at the band edge
+		if t < 0.2 {
+			b.WriteRune(r) // outside the band (and its faint edge) → plain, no dark dip
+			continue
+		}
+		b.WriteString(shimmerStyle(t).Render(string(r)))
+	}
+	return b.String(), true
+}
+
+// shimmerStyle maps a sweep intensity (0=edge, 1=head) onto the brighter half of
+// the pulse ramp so the band only lifts the name above its resting tone, bolding
+// the crest for a touch more pop.
+func shimmerStyle(t float64) lipgloss.Style {
+	n := len(pulseRamp)
+	if n == 0 {
+		return lipgloss.NewStyle().Foreground(colMeta)
+	}
+	lo := n / 2 // never reach for the dim low stops — those would darken the name
+	idx := lo + int(t*float64(n-1-lo)+0.5)
+	if idx < lo {
+		idx = lo
+	}
+	if idx >= n {
+		idx = n - 1
+	}
+	s := lipgloss.NewStyle().Foreground(pulseRamp[idx])
+	if t > 0.6 {
+		s = s.Bold(true)
+	}
+	return s
 }
 
 // truncatePath keeps the filename visible by trimming the left (directory) side.
