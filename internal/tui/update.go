@@ -298,7 +298,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// the overview, drop back to the branch diff it (or its origin) summarizes.
 		// On the base branch the diff is degenerate (merge base = HEAD), so the key
 		// is inert — matching the hidden footer/help hint — and the reader stays put.
-		if m.onBaseBranch() {
+		// Not offered from the commit-history view either, where per-commit previews
+		// are the point; the branch diff is reachable from the commit views instead.
+		if m.onBaseBranch() || m.mode == viewLog {
 			return m, nil
 		}
 		switch m.mode {
@@ -365,6 +367,11 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Toggle unified ↔ side-by-side. Row counts differ between modes, so
 		// reset to the top to keep the scroll position sensible. Expansions are
 		// about which lines are revealed, not layout, so they're preserved.
+		// Inert in the commit-history view, whose right pane is a fixed per-commit
+		// preview rather than an interactive diff.
+		if m.mode == viewLog {
+			return m, nil
+		}
 		m.splitView = !m.splitView
 		m.diffOffset = 0
 		m.diffCursor = 0

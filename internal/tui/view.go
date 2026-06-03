@@ -1130,11 +1130,7 @@ func (m model) footerView() string {
 		}
 		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewLog:
-		keys = []string{"j/k select", "h/l ⇄ pane", "↵ open"}
-		if !m.onBaseBranch() {
-			keys = append(keys, "D "+m.branchDiffLabel())
-		}
-		keys = append(keys, "d details", "S summary", "s split", "t theme", "? help", "q quit")
+		keys = []string{"j/k select", "h/l ⇄ pane", "↵ open", "d details", "S summary", "t theme", "? help", "q quit"}
 	case viewCommit:
 		keys = []string{
 			"j/k move", "h/l ⇄ pane", "↵ open", "f find", "/ search", "d details", "S summary", "[ ] sidebar", "s split", "t theme", "esc back", "? help", "q quit",
