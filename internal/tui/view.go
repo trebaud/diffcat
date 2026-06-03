@@ -361,7 +361,7 @@ func commitDivider(label string, width int) string {
 // list, with a green glyph to flag it as the live working state.
 func (m model) workingRow(selected bool, width int) string {
 	glyph := "○"
-	n := len(m.files)
+	n := m.workingCount
 	noun := "files"
 	if n == 1 {
 		noun = "file"

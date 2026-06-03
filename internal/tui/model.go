@@ -91,6 +91,12 @@ type model struct {
 	// indexes shift by one (see logRowCount/onWorkingRow/commitIndex).
 	logWorking bool
 
+	// workingCount is the number of files with uncommitted changes (against HEAD:
+	// staged + unstaged + untracked) — what the working-tree row summarizes and
+	// what gates logWorking. It's distinct from len(m.files), which counts the
+	// branch-vs-base diff and is non-empty on any feature branch.
+	workingCount int
+
 	// Per-commit drill-in (viewCommit). scopeCommit is the commit whose files the
 	// tree currently shows (nil outside viewCommit); its SHA scopes loadDiff to
 	// that commit's patch. Drilling in repurposes the shared tree fields, so the

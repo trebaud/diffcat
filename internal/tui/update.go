@@ -716,7 +716,7 @@ func (m *model) refresh() {
 			prevSHA = c.SHA
 		}
 		m.loadCommits()
-		m.logWorking = len(m.files) > 0
+		m.refreshWorkingCount()
 		// Keep the reader on the working-tree row across a sync when it's still
 		// present; otherwise re-find the same commit by SHA.
 		if wasWorking && m.logWorking {

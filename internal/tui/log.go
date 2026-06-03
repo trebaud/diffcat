@@ -77,11 +77,25 @@ func (m model) detailsCommit() *git.Commit {
 // starts there — that's the most likely thing the reader wants to look at.
 func (m *model) enterLog() {
 	m.loadCommits()
-	m.logWorking = len(m.files) > 0
+	m.refreshWorkingCount()
 	m.mode = viewLog
 	m.focus = focusFiles
 	m.commitCursor = 0
 	m.loadCommitDiff()
+}
+
+// refreshWorkingCount recomputes the uncommitted-change count (against HEAD) and
+// pins/unpins the working-tree row accordingly. It counts the same files the row
+// drills into (git.ChangedFiles against HEAD: staged + unstaged + untracked), so
+// the row appears only when the working tree actually has changes — not merely
+// because the feature branch differs from its base.
+func (m *model) refreshWorkingCount() {
+	if files, err := git.ChangedFiles(m.repo, "HEAD"); err == nil {
+		m.workingCount = len(files)
+	} else {
+		m.workingCount = 0
+	}
+	m.logWorking = m.workingCount > 0
 }
 
 // exitLog leaves the history view for the aggregated branch-vs-base diff (the
