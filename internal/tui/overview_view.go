@@ -9,9 +9,10 @@ import (
 	"github.com/trebaud/diffcat/internal/git"
 )
 
-// overview_view.go renders the branch overview dashboard (viewOverview): a
-// full-width header, a fixed summary + language block, then a scrollable
-// per-file churn list with proportional add/del bars.
+// overview_view.go renders the Stats dashboard (viewOverview): a full-width
+// header, a title + commit-count summary, and a per-author ranking by commit
+// count (each human author and each AI agent its own bar). No file list — the
+// dashboard is intentionally diff-free so it stays fast on a deep history.
 
 // overviewView composes the full screen for the dashboard: header, body padded
 // to fill the height, and the shared footer. Like the two-pane render it emits
@@ -29,94 +30,49 @@ func (m model) overviewView() string {
 	return strings.Join(lines, "\n")
 }
 
-// overviewBody builds exactly height body lines: a fixed top block (summary +
-// languages + the "Files changed" heading) followed by the scrollable file
-// list, windowed around overviewCursor and padded to fill.
+// overviewBody builds exactly height body lines: the title, the commit-count
+// summary, an "Authored by" heading, and one ranked bar per author. With more
+// authors than fit, the last line becomes a "+N more" roll-up; the rest is padded
+// blank to fill the height.
 func (m model) overviewBody(width, height int) []string {
-	files := m.overviewFiles()
-	maxChurn := 0
-	for _, f := range files {
-		if c := churnOf(f); c > maxChurn {
-			maxChurn = c
+	// The Stats come from a background `git log` walk; meaningless until it lands,
+	// so show a loading body rather than an empty ranking.
+	if !m.historyComputed {
+		return m.overviewLoading(width, height)
+	}
+
+	out := []string{
+		padLine(m.overviewTitle(), width),
+		padLine("", width),
+		padLine(m.overviewSummary(), width),
+		padLine("", width),
+		padLine(headingStyle.Render("  Authored by"), width),
+	}
+
+	authors := m.historyStats.Authors
+	total := authorTotal(authors)
+	avail := height - len(out)
+	if avail < 0 {
+		avail = 0
+	}
+	switch {
+	case total == 0:
+		out = append(out, padLine(mutedStyle.Render("  no commits"), width))
+	case avail > 0:
+		overflow := 0
+		if len(authors) > avail {
+			// Reserve the last visible line for the "+N more" roll-up.
+			authors = authors[:max(0, avail-1)]
+			overflow = len(m.historyStats.Authors) - len(authors)
+		}
+		for _, s := range authors {
+			out = append(out, padLine(authorRow(s, total), width))
+		}
+		if overflow > 0 {
+			out = append(out, padLine(mutedStyle.Render(fmt.Sprintf("  +%d more", overflow)), width))
 		}
 	}
 
-	top := []string{padLine(m.overviewSummary(), width)}
-	if langs := languageStats(m.overviewFileSet()); len(langs) > 0 {
-		total := 0
-		for _, l := range langs {
-			total += l.churn
-		}
-		if len(langs) > 5 {
-			langs = langs[:5]
-		}
-		top = append(top, padLine("", width), padLine(headingStyle.Render("  Languages"), width))
-		for _, l := range langs {
-			top = append(top, padLine(m.langRow(l, total, width), width))
-		}
-	}
-	if c := m.overviewCommit; c != nil {
-		// A single commit's churn is all one class, so the split is trivially 100%:
-		// name the AI agent that signed it, else it's all Human — a single row
-		// either way (no point pairing a "Human 0%" filler under the agent).
-		top = append(top, padLine("", width), padLine(headingStyle.Render("  Authored by"), width))
-		if agent := c.AIAgent(); agent != "" {
-			top = append(top, padLine(shareRow(agent, 1, 1, titleStyle), width))
-		} else {
-			top = append(top, padLine(shareRow("Human", 1, 1, addedStyle), width))
-		}
-	} else if total := authorTotal(m.authorShares); total > 0 {
-		top = append(top, padLine("", width), padLine(headingStyle.Render("  Authored by"), width))
-		for _, s := range m.authorShares {
-			// Skip agents whose churn rounds to 0% — a stray co-author line or a
-			// handful of edits shouldn't litter the split with empty bars.
-			if sharePct(s.Churn, total) == 0 {
-				continue
-			}
-			style := titleStyle
-			if s.Name == "Human" {
-				style = addedStyle
-			}
-			top = append(top, padLine(shareRow(s.Name, s.Churn, total, style), width))
-		}
-	} else if m.authorComputing {
-		top = append(top, padLine("", width), padLine(headingStyle.Render("  Authored by"), width),
-			padLine(mutedStyle.Render("  analyzing commit history…"), width))
-	}
-
-	top = append(top, padLine("", width),
-		padLine(headingStyle.Render(fmt.Sprintf("  Files changed (%d)", len(files))), width))
-
-	// If the fixed block already fills the screen, just show what fits.
-	if len(top) >= height {
-		return top[:height]
-	}
-	region := height - len(top)
-
-	cur := m.overviewCursor
-	if cur >= len(files) {
-		cur = max(0, len(files)-1)
-	}
-	offset := 0
-	if cur >= region {
-		offset = cur - region + 1
-	}
-	end := min(offset+region, len(files))
-
-	out := top
-	if len(files) == 0 {
-		out = append(out, padLine(mutedStyle.Render("  no changes against base"), width))
-	}
-	for i := offset; i < end; i++ {
-		out = append(out, m.overviewFileRow(files[i], i == cur, maxChurn, width))
-	}
-	for shown := end - offset; shown < region; shown++ {
-		if len(files) == 0 && shown == 0 {
-			continue // the "no changes" line already used a slot
-		}
-		out = append(out, padLine("", width))
-	}
-	// Guard the exact height (the no-files branch can be off by one).
 	if len(out) > height {
 		out = out[:height]
 	}
@@ -126,32 +82,42 @@ func (m model) overviewBody(width, height int) []string {
 	return out
 }
 
-// overviewSummary is the one-line totals row: file count, aggregate +adds/-dels,
-// and a scope tail — the branch's commit count, or for a commit overview the
-// commit's short SHA and subject.
+// overviewTitle labels the dashboard: the whole-repo Stats.
+func (m model) overviewTitle() string {
+	return "  " + titleStyle.Render("Stats") + "  " + mutedStyle.Render("entire commit history")
+}
+
+// overviewSummary is the one-line totals row: the non-merge commit count and how
+// many distinct authors contributed.
 func (m model) overviewSummary() string {
-	files := m.overviewFileSet()
-	add, del := 0, 0
-	for _, f := range files {
-		if f.Added > 0 {
-			add += f.Added
-		}
-		if f.Deleted > 0 {
-			del += f.Deleted
-		}
+	authors := len(m.historyStats.Authors)
+	aw := "authors"
+	if authors == 1 {
+		aw = "author"
 	}
-	stat := addedStyle.Render(fmt.Sprintf("+%d", add)) + " " + removedStyle.Render(fmt.Sprintf("-%d", del))
-	tail := mutedStyle.Render(fmt.Sprintf("%d commits", len(m.commits)))
-	if c := m.overviewCommit; c != nil {
-		tail = metaStyle.Render(c.Short) + " " + mutedStyle.Render(truncateText(c.Subject, 50))
+	return "  " + headingStyle.Render(fmt.Sprintf("%d commits", m.historyStats.Commits)) +
+		"   " + mutedStyle.Render(fmt.Sprintf("%d %s", authors, aw))
+}
+
+// overviewLoading is the placeholder body shown while the stats are still being
+// gathered in the background: the title, a muted progress line, and blank fill to
+// the exact body height.
+func (m model) overviewLoading(width, height int) []string {
+	out := []string{
+		padLine(m.overviewTitle(), width),
+		padLine("", width),
+		padLine(mutedStyle.Render("  analyzing commit history…"), width),
 	}
-	return "  " + headingStyle.Render(fmt.Sprintf("%d files changed", len(files))) +
-		"   " + stat + "   " + tail
+	if len(out) > height {
+		return out[:height]
+	}
+	for len(out) < height {
+		out = append(out, padLine("", width))
+	}
+	return out
 }
 
 // sharePct is value as a rounded whole percentage of total (0 when total is 0).
-// It's the number the share bars print, and the test the Authorship rows use to
-// drop agents whose churn rounds to 0% — see overviewBody.
 func sharePct(value, total int) int {
 	if total <= 0 {
 		return 0
@@ -159,131 +125,39 @@ func sharePct(value, total int) int {
 	return int(float64(value)/float64(total)*100 + 0.5)
 }
 
-// authorTotal sums the churn across authorship buckets — the denominator for the
-// "Authored by" share bars.
+// authorTotal sums the commit counts across authorship buckets — the denominator
+// for the ranking bars (and equal to the non-merge commit count).
 func authorTotal(shares []git.AuthorShare) int {
 	total := 0
 	for _, s := range shares {
-		total += s.Churn
+		total += s.Commits
 	}
 	return total
 }
 
-// langRow renders one language's share: a padded name, a fixed mini-bar of its
-// fraction of total churn, and the percentage.
-func (m model) langRow(l langStat, total, width int) string {
-	return shareRow(l.name, l.churn, total, metaStyle)
-}
-
-// shareRow renders a labeled proportional mini-bar: a padded label, a fixed-width
-// bar whose filled fraction is value/total in the given color, and the rounded
-// percentage. It's the shared shape behind the Languages and Authorship rows.
-func shareRow(label string, value, total int, fill lipgloss.Style) string {
+// authorRow renders one ranked author line: a padded name, a fixed-width bar of
+// their share of all commits (accent-colored for an AI agent, green for a human),
+// the rounded percentage, and the commit count.
+func authorRow(s git.AuthorShare, total int) string {
 	const barW = 12
-	pct, filled := sharePct(value, total), 0
+	pct, filled := sharePct(s.Commits, total), 0
 	if total > 0 {
-		filled = int(float64(value)/float64(total)*float64(barW) + 0.5)
+		filled = int(float64(s.Commits)/float64(total)*float64(barW) + 0.5)
 	}
 	if filled > barW {
 		filled = barW
 	}
+	fill := addedStyle // human
+	if s.AI {
+		fill = titleStyle
+	}
 	bar := fill.Render(strings.Repeat("█", filled)) + borderStyle.Render(strings.Repeat("░", barW-filled))
-	name := truncateText(label, 16)
-	return "  " + padRight(name, 16) + " " + bar + mutedStyle.Render(fmt.Sprintf(" %3d%%", pct))
-}
-
-// overviewFileRow renders one file's churn line: status glyph, path, +adds/-dels,
-// and a proportional add/del bar scaled to the largest file's churn. The selected
-// row is a continuous highlight bar (with a plain bar so it reads on the tint).
-func (m model) overviewFileRow(f git.FileChange, selected bool, maxChurn, width int) string {
-	glyph := statusGlyph(f.Status)
-	stats := fmt.Sprintf("+%d -%d", f.Added, f.Deleted)
-	if f.Binary() {
-		stats = "bin"
+	word := "commits"
+	if s.Commits == 1 {
+		word = "commit"
 	}
-	statsW := lipgloss.Width(stats)
-
-	barW := width / 5
-	if barW > 20 {
-		barW = 20
-	}
-	if barW < 6 {
-		barW = 6
-	}
-
-	prefixW := 4 // "  " + glyph + " "
-	avail := width - prefixW - statsW - 2 - barW - 1
-	if avail < 3 {
-		avail = 3
-	}
-	name := truncatePath(f.Path, avail)
-	gap := width - prefixW - lipgloss.Width(name) - statsW - 2 - barW
-	if gap < 1 {
-		gap = 1
-	}
-
-	if selected {
-		row := "  " + glyph + " " + name + strings.Repeat(" ", gap) + stats + "  " +
-			plainBar(f.Added, f.Deleted, maxChurn, barW)
-		return selectedRowStyle.Width(width).Render(row)
-	}
-
-	statsStyled := mutedStyle.Render(stats)
-	if !f.Binary() {
-		statsStyled = addedStyle.Render(fmt.Sprintf("+%d", f.Added)) + " " +
-			removedStyle.Render(fmt.Sprintf("-%d", f.Deleted))
-	}
-	row := "  " + statusStyle(f.Status).Render(glyph) + " " + name + strings.Repeat(" ", gap) +
-		statsStyled + "  " + diffstatBar(f.Added, f.Deleted, maxChurn, barW)
-	return padLine(row, width)
-}
-
-// barCells splits a width-wide bar into green (added), red (deleted), and faint
-// track (unfilled) cells. The filled length is the file's churn relative to the
-// largest file's churn, so longer bars mean more change; within the filled span,
-// the green/red split mirrors the add/delete ratio.
-func barCells(added, deleted, maxChurn, width int) (green, red, track int) {
-	churn := 0
-	if added > 0 {
-		churn += added
-	}
-	if deleted > 0 {
-		churn += deleted
-	}
-	filled := 0
-	if maxChurn > 0 {
-		filled = int(float64(churn)/float64(maxChurn)*float64(width) + 0.5)
-	}
-	if filled > width {
-		filled = width
-	}
-	if churn > 0 && filled == 0 {
-		filled = 1 // any change earns at least one cell
-	}
-	if churn > 0 {
-		green = int(float64(added)/float64(churn)*float64(filled) + 0.5)
-	}
-	if green > filled {
-		green = filled
-	}
-	red = filled - green
-	track = width - filled
-	return green, red, track
-}
-
-// diffstatBar renders the colored churn bar (green adds, red dels, faint track).
-func diffstatBar(added, deleted, maxChurn, width int) string {
-	g, r, t := barCells(added, deleted, maxChurn, width)
-	return addedStyle.Render(strings.Repeat("█", g)) +
-		removedStyle.Render(strings.Repeat("█", r)) +
-		borderStyle.Render(strings.Repeat("░", t))
-}
-
-// plainBar is diffstatBar without color, for the selected row whose highlight
-// bar owns the whole row's tint.
-func plainBar(added, deleted, maxChurn, width int) string {
-	g, r, t := barCells(added, deleted, maxChurn, width)
-	return strings.Repeat("█", g+r) + strings.Repeat("░", t)
+	return "  " + padRight(truncateText(s.Name, 18), 18) + " " + bar +
+		mutedStyle.Render(fmt.Sprintf(" %3d%%  %d %s", pct, s.Commits, word))
 }
 
 // padRight pads s with trailing spaces to exactly n display columns, truncating

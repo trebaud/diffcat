@@ -70,6 +70,18 @@ func MergeBase(repo, base string) string {
 	return base
 }
 
+// HeadSHA returns the full SHA of HEAD, or "" on error. It's a cheap way to tell
+// whether committed history has moved (a commit, checkout, reset, or rebase)
+// since some earlier point — used to decide when the whole-history Summary's
+// cached stats need recomputing, so a mere working-tree edit doesn't trigger one.
+func HeadSHA(repo string) string {
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // isBranch reports whether ref names a local or remote-tracking branch.
 func isBranch(repo, ref string) bool {
 	for _, full := range []string{"refs/heads/" + ref, "refs/remotes/" + ref} {
@@ -121,8 +133,8 @@ func (c Commit) IsMerge() bool { return len(c.Parents) > 1 }
 // author name/email and the Co-authored-by trailers only — never the rest of the
 // message — so ordinary prose can't trip a marker (e.g. "cursor" describing the UI
 // cursor must not flag a human commit as AI). It's the single-commit counterpart
-// to the per-commit classification Authorship runs across base..HEAD, using the
-// same signals — used to label a commit-scoped overview.
+// to the per-commit classification History runs across the whole history, using
+// the same signals — used to label a commit's Stats.
 func (c Commit) AIAgent() string {
 	return aiAgent(c.Author + "\x00" + c.AuthorEmail + "\x00" + c.coAuthorTrailers())
 }
@@ -655,7 +667,7 @@ func aiAgent(signals string) string {
 }
 
 // authorCommit carries one non-merge commit's authorship signals plus its churn
-// (added+deleted lines) — the unit Authorship aggregates into the AI/human split.
+// (added+deleted lines) — the unit parseHistory aggregates into the AI/human split.
 type authorCommit struct {
 	author    string
 	email     string
@@ -676,76 +688,81 @@ func (c authorCommit) isAIAuthored() bool { return c.agent() != "" }
 
 // authorshipFormat frames one line per commit: author, email, and the (possibly
 // multiple, %x1f-joined) Co-authored-by values. Leading %x1e (RS) marks each
-// commit so the --numstat block that follows the header parses unambiguously.
+// commit so records split unambiguously regardless of trailing newlines.
 const authorshipFormat = "--pretty=format:%x1e%an%x1f%ae%x1f%(trailers:key=Co-authored-by,valueonly,separator=%x1f)"
 
-// AuthorShare is one bucket of the branch's committed churn: a named AI agent
-// (e.g. "Claude") or "Human", with the added+deleted lines attributed to it.
+// AuthorShare is one bucket of the commit count: either a named AI coding agent
+// (e.g. "Claude", detected via aiAgentMarkers) or an individual human author (by
+// their git author name), with the number of non-merge commits attributed to it.
+// AI is true for an agent bucket so the dashboard can color it apart from humans.
 type AuthorShare struct {
-	Name  string
-	Churn int
+	Name    string
+	Commits int
+	AI      bool
 }
 
-// Authorship splits the branch's committed churn (added+deleted lines) by author
-// class — one bucket per AI agent that signed commits (named via aiAgentMarkers,
-// e.g. "Claude") plus "Human" — classifying each non-merge commit in base..HEAD by
-// its author and Co-authored-by trailers. It mirrors Commits' range fallback: when
-// base..HEAD is empty (HEAD sits on base) it classifies HEAD's full history
-// instead. Merges are excluded so their combined diffs don't double-count, and
-// uncommitted work — attributable to neither side — is left out. Buckets are
-// returned sorted by churn descending (ties by name); nil when there's no churn.
-func Authorship(repo, base string) []AuthorShare {
-	commits := authorshipLog(repo, base+"..HEAD")
-	if len(commits) == 0 {
-		commits = authorshipLog(repo, "HEAD")
-	}
-	byName := map[string]int{}
-	for _, c := range commits {
-		name := c.agent()
-		if name == "" {
-			name = "Human"
+// sortAuthorShares orders authorship buckets by commit count descending, ties by
+// name — the order the Stats dashboard ranks them in.
+func sortAuthorShares(shares []AuthorShare) {
+	sort.Slice(shares, func(i, j int) bool {
+		if shares[i].Commits != shares[j].Commits {
+			return shares[i].Commits > shares[j].Commits
 		}
-		byName[name] += c.churn
-	}
-	var out []AuthorShare
-	for name, churn := range byName {
-		if churn > 0 {
-			out = append(out, AuthorShare{Name: name, Churn: churn})
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Churn != out[j].Churn {
-			return out[i].Churn > out[j].Churn
-		}
-		return out[i].Name < out[j].Name
+		return shares[i].Name < shares[j].Name
 	})
-	return out
 }
 
-// authorshipLog runs `git log --numstat` over revRange and parses the result into
-// per-commit authorship records. Returns nil on error (e.g. an empty range).
-func authorshipLog(repo, revRange string) []authorCommit {
-	out, err := exec.Command("git", "-C", repo, "log", "--no-color", "--no-merges", "--numstat", authorshipFormat, revRange).Output()
+// HistoryStats summarizes everything reachable from a revision: the non-merge
+// commit count and a per-author ranking by commit count (each human author and
+// each AI agent its own bucket). It backs the whole-repo Stats dashboard.
+//
+// Deliberately churn-free: it's gathered from a plain `git log` with no diff
+// stat, so git never has to diff any commit — the cheap commit walk stays fast
+// even on a deep history, where `--numstat`/`--shortstat` (which diff every
+// commit) would be the bottleneck.
+type HistoryStats struct {
+	Commits int
+	Authors []AuthorShare
+}
+
+// History gathers HistoryStats for everything reachable from rev (e.g. "HEAD")
+// from a single `git log` that only formats author/co-author fields — no diff, so
+// it stays fast on large histories. Merges are excluded (a merge isn't authored
+// work to rank). Still run off the UI thread, since even a bare walk of a very
+// deep history isn't instant. Returns a zero HistoryStats on error.
+func History(repo, rev string) HistoryStats {
+	out, err := exec.Command("git", "-C", repo, "log", "--no-color", "--no-merges", authorshipFormat, rev).Output()
 	if err != nil {
-		return nil
+		return HistoryStats{}
 	}
-	return parseAuthorship(out)
+	return parseHistory(out)
 }
 
-// parseAuthorship turns `git log --numstat` output (framed by authorshipFormat)
-// into per-commit records. Each %x1e-delimited record is a header line (author,
-// email, co-authors, %x1f-separated) followed by the commit's numstat lines.
-// Pure, so it can be tested without a repository.
-func parseAuthorship(data []byte) []authorCommit {
-	var out []authorCommit
+// parseHistory aggregates `git log` output (framed by authorshipFormat) into
+// HistoryStats: the non-merge commit count and a per-author commit ranking. Each
+// commit is classified once — to the AI agent that signed it (author or
+// Co-authored-by trailer), else to its human author by name — and increments that
+// bucket. Pure, so it's testable without a repository.
+func parseHistory(data []byte) HistoryStats {
+	type acc struct {
+		commits int
+		ai      bool
+	}
+	byName := map[string]*acc{}
+	commits := 0
+
 	for _, rec := range strings.Split(string(data), "\x1e") {
 		rec = strings.Trim(rec, "\n")
 		if rec == "" {
 			continue
 		}
-		lines := strings.Split(rec, "\n")
-		f := strings.SplitN(lines[0], "\x1f", 3)
-		c := authorCommit{}
+		commits++
+		header := rec
+		if i := strings.IndexByte(rec, '\n'); i >= 0 {
+			header = rec[:i]
+		}
+		f := strings.SplitN(header, "\x1f", 3)
+		var c authorCommit
 		if len(f) > 0 {
 			c.author = f[0]
 		}
@@ -755,29 +772,27 @@ func parseAuthorship(data []byte) []authorCommit {
 		if len(f) > 2 {
 			c.coauthors = f[2]
 		}
-		for _, l := range lines[1:] {
-			c.churn += numstatChurn(l)
+		name := c.agent()
+		ai := name != ""
+		if !ai {
+			if name = strings.TrimSpace(c.author); name == "" {
+				name = "Unknown"
+			}
 		}
-		out = append(out, c)
+		a := byName[name]
+		if a == nil {
+			a = &acc{ai: ai}
+			byName[name] = a
+		}
+		a.commits++
 	}
-	return out
-}
 
-// numstatChurn returns added+deleted for one `--numstat` line ("added<TAB>deleted
-// <TAB>path"), treating the binary "-\t-" markers and any unparsable line as 0.
-func numstatChurn(line string) int {
-	fields := strings.Fields(line)
-	if len(fields) < 3 {
-		return 0
+	authors := make([]AuthorShare, 0, len(byName))
+	for name, a := range byName {
+		authors = append(authors, AuthorShare{Name: name, Commits: a.commits, AI: a.ai})
 	}
-	add, del := 0, 0
-	if _, err := fmt.Sscanf(fields[0], "%d", &add); err != nil {
-		add = 0
-	}
-	if _, err := fmt.Sscanf(fields[1], "%d", &del); err != nil {
-		del = 0
-	}
-	return add + del
+	sortAuthorShares(authors)
+	return HistoryStats{Commits: commits, Authors: authors}
 }
 
 // Shortstat returns a one-line summary of the whole diff against base, e.g.

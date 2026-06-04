@@ -203,30 +203,21 @@ type model struct {
 	fileFindInput  string
 	fileFindSel    int
 
-	// Overview dashboard (viewOverview, toggled with `S`). overviewCursor is the
-	// selected file row in the per-file churn list.
-	//
-	// The dashboard has two scopes. The default is branch-vs-base (overviewCommit
-	// nil) and summarizes m.files. Pressing `S` on a commit in the history (or
-	// while drilled into one) instead opens a per-commit overview: overviewCommit
-	// is that commit and overviewCommitFiles its changed files, summarized in
-	// place of m.files. overviewReturn is the mode to restore on exit (viewBranch
-	// for the branch overview, viewLog/viewCommit for a commit one).
-	overviewCursor      int
-	overviewCommit      *git.Commit
-	overviewCommitFiles []git.FileChange
-	overviewReturn      viewMode
+	// Stats dashboard (viewOverview, toggled with `S` from the commit-history view).
+	// It always summarizes the whole repo — every commit reachable from HEAD, from
+	// m.historyStats — and is read-only (no cursor); esc/S returns to the history.
 
-	// Authorship split for the overview: committed churn bucketed by author class
-	// — one entry per named AI agent plus "Human" (git.Authorship). Computed lazily
-	// on first entry and invalidated by refresh, so it doesn't shell `git log` on
-	// every dashboard open. The computation can scan the whole history (when HEAD
-	// sits on the base), so it runs in the background — authorComputing guards a
-	// poll in flight so the dashboard opens instantly and the bars fill in when the
-	// authorshipMsg lands.
-	authorShares    []git.AuthorShare
-	authorComputed  bool
-	authorComputing bool
+	// Whole-repo Stats (git.History): the non-merge commit count and a per-author
+	// commit ranking across every commit reachable from HEAD. A `git log` walk of a
+	// deep history can take a moment, so it's computed lazily in the background on
+	// first open — historyComputing guards a run in flight so the dashboard opens
+	// instantly and fills in when the historyMsg lands. historyHead is the HEAD it
+	// was computed against, so refresh only invalidates it when committed history
+	// actually moved (not on a mere working-tree edit, which doesn't change it).
+	historyStats     git.HistoryStats
+	historyComputed  bool
+	historyComputing bool
+	historyHead      string
 
 	err error
 }

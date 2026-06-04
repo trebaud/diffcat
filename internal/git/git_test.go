@@ -176,8 +176,8 @@ func TestStatusPaths(t *testing.T) {
 	}
 }
 
-// authorRec builds one authorship record in the framing parseAuthorship expects:
-// a leading RS (0x1e), a header of author/email/co-authors joined by US (0x1f),
+// authorRec builds one commit record in the framing parseHistory expects: a
+// leading RS (0x1e), a header of author/email/co-authors joined by US (0x1f),
 // then the commit's --numstat lines (each "added\tdeleted\tpath").
 func authorRec(author, email, coauthors string, numstat ...string) string {
 	rec := "\x1e" + author + "\x1f" + email + "\x1f" + coauthors
@@ -185,25 +185,6 @@ func authorRec(author, email, coauthors string, numstat ...string) string {
 		rec += "\n" + n
 	}
 	return rec
-}
-
-func TestParseAuthorshipChurn(t *testing.T) {
-	data := authorRec("Ada", "ada@x.io", "", "10\t2\tmain.go", "-\t-\tlogo.png", "3\t0\tutil.go") +
-		"\n" + authorRec("Bob", "bob@x.io", "Claude <noreply@anthropic.com>", "5\t5\tapp.go")
-	got := parseAuthorship([]byte(data))
-	if len(got) != 2 {
-		t.Fatalf("got %d commits, want 2", len(got))
-	}
-	// binary "-\t-" contributes 0; the rest sum added+deleted.
-	if got[0].churn != 15 {
-		t.Errorf("commit 0 churn = %d, want 15", got[0].churn)
-	}
-	if got[1].churn != 10 {
-		t.Errorf("commit 1 churn = %d, want 10", got[1].churn)
-	}
-	if got[0].coauthors != "" || got[1].coauthors != "Claude <noreply@anthropic.com>" {
-		t.Errorf("coauthors parsed wrong: %q / %q", got[0].coauthors, got[1].coauthors)
-	}
 }
 
 func TestIsAIAuthored(t *testing.T) {
@@ -221,6 +202,37 @@ func TestIsAIAuthored(t *testing.T) {
 	for _, tc := range cases {
 		if got := tc.c.isAIAuthored(); got != tc.want {
 			t.Errorf("%s: isAIAuthored() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestParseHistory(t *testing.T) {
+	// Four commits: Ada x2, Bob x1, and one Bob authored but Claude co-authored
+	// (which must classify to Claude, not Bob). Any numstat-looking lines are
+	// ignored — parseHistory reads only the header.
+	data := authorRec("Ada", "ada@x.io", "") + "\n" +
+		authorRec("Ada", "ada@x.io", "") + "\n" +
+		authorRec("Bob", "bob@x.io", "") + "\n" +
+		authorRec("Bob", "bob@x.io", "Claude <noreply@anthropic.com>")
+	got := parseHistory([]byte(data))
+
+	if got.Commits != 4 {
+		t.Errorf("Commits = %d, want 4", got.Commits)
+	}
+
+	// Ranked by commit count desc, ties by name: Ada(2) human, then Bob(1) human
+	// and Claude(1) AI tie and sort by name. Each human keeps their own bucket.
+	want := []AuthorShare{
+		{Name: "Ada", Commits: 2, AI: false},
+		{Name: "Bob", Commits: 1, AI: false},
+		{Name: "Claude", Commits: 1, AI: true},
+	}
+	if len(got.Authors) != len(want) {
+		t.Fatalf("got %d authors %v, want %d", len(got.Authors), got.Authors, len(want))
+	}
+	for i, w := range want {
+		if got.Authors[i] != w {
+			t.Errorf("Authors[%d] = %+v, want %+v", i, got.Authors[i], w)
 		}
 	}
 }

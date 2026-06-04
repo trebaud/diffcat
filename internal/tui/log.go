@@ -165,8 +165,8 @@ func (m *model) enterCommit() {
 // scopeToCommit stashes the branch tree and repurposes the shared tree fields for
 // commit c: it loads c's changed files and scopes the diff pipeline to that
 // commit (viewCommit). It's the shared setup behind drilling in from the history
-// list (enterCommit) and from a commit-scoped overview (enterOverviewFile). The
-// caller loads the diff afterward — directly, or via jumpToFile to a chosen path.
+// list (enterCommit). The caller loads the diff afterward — directly, or via
+// jumpToFile to a chosen path.
 func (m *model) scopeToCommit(c *git.Commit) {
 	// Stash the branch tree so leaving restores it untouched.
 	m.branchFiles = m.files

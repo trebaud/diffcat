@@ -123,22 +123,28 @@ func TestRenderNoWrap(t *testing.T) {
 	details.showCommitDetails = true
 	detailsScrolled := details
 	detailsScrolled.detailsScroll = 99 // past the end → clamps
-	// The overview dashboard (churn bars + language breakdown).
+	// The whole-repo Stats (per-author commit ranking). Its data is the background
+	// git.History result, so populate historyStats and mark it computed; otherwise
+	// it renders the loading placeholder (overviewLoading below). Several authors
+	// (one AI, several humans, plus a long name) exercise the ranking layout.
 	overview := sampleModel()
 	overview.mode = viewOverview
 	overview.commits = logSampleModel().commits
+	overview.historyComputed = true
+	overview.historyStats = git.HistoryStats{
+		Commits: 137,
+		Authors: []git.AuthorShare{
+			{Name: "Claude", Commits: 82, AI: true},
+			{Name: "Ada Lovelace", Commits: 31},
+			{Name: "A Contributor With A Very Long Display Name", Commits: 18},
+			{Name: "Bob", Commits: 6},
+		},
+	}
 	overviewEmpty := overview
-	overviewEmpty.files, overviewEmpty.rows = nil, nil // "no changes" state
-	// The commit-scoped overview (opened with S on a commit): summarizes one
-	// commit's files, with the SHA/subject tail and a single author label. One
-	// human-authored, one AI-authored to exercise both label branches.
-	commitOverview := sampleModel()
-	commitOverview.mode = viewOverview
-	commitOverview.overviewReturn = viewLog
-	commitOverview.overviewCommit = &git.Commit{Short: "aaa1111", Author: "Ada Lovelace", Subject: "Tighten README for end users with a subject long enough to need truncation in a narrow pane"}
-	commitOverview.overviewCommitFiles = sampleModel().files
-	aiOverview := commitOverview
-	aiOverview.overviewCommit = &git.Commit{Short: "bbb2222", Author: "Claude", AuthorEmail: "noreply@anthropic.com", Subject: "Wire up the per-commit overview"}
+	overviewEmpty.historyStats = git.HistoryStats{} // "no commits" state
+	// The Stats while their background computation is still in flight.
+	overviewLoading := overview
+	overviewLoading.historyComputed = false
 	// A committed diff search, the active search prompt, and the fuzzy file picker.
 	searched := sampleModel()
 	searched.focus = focusDiff
@@ -164,7 +170,7 @@ func TestRenderNoWrap(t *testing.T) {
 	openLog := logSampleModel()
 	openLog.logDiffOpen = true
 	openLog.focus = focusDiff
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewEmpty, commitOverview, aiOverview, searched, searchPrompt, finding, hiddenSidebar, wideLog} {
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewEmpty, overviewLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -186,11 +192,17 @@ func TestFullScreenFill(t *testing.T) {
 	overview := sampleModel()
 	overview.mode = viewOverview
 	overview.commits = logSampleModel().commits
-	commitOverview := sampleModel()
-	commitOverview.mode = viewOverview
-	commitOverview.overviewReturn = viewLog
-	commitOverview.overviewCommit = &git.Commit{Short: "aaa1111", Author: "Ada Lovelace", Subject: "Tighten README"}
-	commitOverview.overviewCommitFiles = sampleModel().files
+	overview.historyComputed = true
+	overview.historyStats = git.HistoryStats{
+		Commits: 137,
+		Authors: []git.AuthorShare{
+			{Name: "Claude", Commits: 82, AI: true},
+			{Name: "Ada Lovelace", Commits: 31},
+			{Name: "Bob", Commits: 6},
+		},
+	}
+	overviewLoading := overview
+	overviewLoading.historyComputed = false
 	hiddenSidebar := sampleModel()
 	hiddenSidebar.sidebar = sidebarHidden
 	wideLog := logSampleModel()
@@ -198,7 +210,7 @@ func TestFullScreenFill(t *testing.T) {
 	wideLog.commits[0].Tags = []string{"v1.2.0"}
 	openLog := logSampleModel()
 	openLog.logDiffOpen = true
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, commitSampleModel(), overview, commitOverview, hiddenSidebar, wideLog} {
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, commitSampleModel(), overview, overviewLoading, hiddenSidebar, wideLog} {
 		m.focus = focusDiff
 		for _, split := range []bool{false, true} {
 			m.splitView = split

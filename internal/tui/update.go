@@ -43,26 +43,28 @@ func syncCmd(repo, baseName string) tea.Cmd {
 	})
 }
 
-// authorshipMsg carries the result of a background authorship computation. The
-// split shells `git log --numstat` over the whole range (the full history when
-// HEAD sits on the base), which can take a second or two — so it runs off the UI
-// thread and lands here rather than blocking the dashboard open.
-type authorshipMsg struct{ shares []git.AuthorShare }
+// historyMsg carries the result of a background whole-history computation. It
+// shells `git log --numstat` over every commit reachable from HEAD, which can
+// take a second or two on a deep history — so it runs off the UI thread and lands
+// here rather than blocking the Summary dashboard open.
+type historyMsg struct{ stats git.HistoryStats }
 
-// authorshipCmd computes the AI/human split in the background.
-func authorshipCmd(repo, base string) tea.Cmd {
-	return func() tea.Msg { return authorshipMsg{shares: git.Authorship(repo, base)} }
+// historyCmd computes the whole-history Summary stats in the background.
+func historyCmd(repo string) tea.Cmd {
+	return func() tea.Msg { return historyMsg{stats: git.History(repo, "HEAD")} }
 }
 
-// ensureAuthorship kicks the background authorship computation when the branch
-// split isn't already computed or in flight, returning the command to run (nil
-// when there's nothing to do). The result arrives as an authorshipMsg.
-func (m *model) ensureAuthorship() tea.Cmd {
-	if m.authorComputed || m.authorComputing {
+// ensureHistory kicks the background whole-history computation when it isn't
+// already computed or in flight, returning the command to run (nil when there's
+// nothing to do). It records the HEAD the run is keyed to so refresh can tell
+// whether the cache is stale. The result arrives as a historyMsg.
+func (m *model) ensureHistory() tea.Cmd {
+	if m.historyComputed || m.historyComputing {
 		return nil
 	}
-	m.authorComputing = true
-	return authorshipCmd(m.repo, m.base)
+	m.historyComputing = true
+	m.historyHead = git.HeadSHA(m.repo)
+	return historyCmd(m.repo)
 }
 
 // Update is the Elm update function — it maps a message to the next model and
@@ -117,10 +119,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tickCmd(interval)
 
-	case authorshipMsg:
-		m.authorShares = msg.shares
-		m.authorComputed = true
-		m.authorComputing = false
+	case historyMsg:
+		m.historyStats = msg.stats
+		m.historyComputed = true
+		m.historyComputing = false
 		return m, nil
 
 	case gitStateMsg:
@@ -131,10 +133,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.refresh()
 		}
 		sync := syncCmd(m.repo, m.baseName)
-		// refresh invalidated the split; recompute it live only while the branch
-		// dashboard is open (where it's on screen), else leave it for the next open.
-		if m.mode == viewOverview && m.overviewCommit == nil {
-			return m, tea.Batch(sync, m.ensureAuthorship())
+		// If the commit that moved invalidated the whole-history stats and the Stats
+		// dashboard is on screen, recompute them live; otherwise leave it for the
+		// next open. (refresh only invalidates when HEAD actually moved.)
+		if m.mode == viewOverview {
+			return m, tea.Batch(sync, m.ensureHistory())
 		}
 		return m, sync
 
@@ -345,24 +348,20 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.refresh()
 		m.syncFingerprint = git.Fingerprint(m.repo, m.baseName)
-		if m.mode == viewOverview && m.overviewCommit == nil {
-			return m, m.ensureAuthorship()
+		if m.mode == viewOverview {
+			return m, m.ensureHistory()
 		}
 		return m, nil
 
 	case "S":
-		// Toggle the overview dashboard. From the branch-vs-base view it's the
-		// branch overview; from the history list or a per-commit tree it's scoped
-		// to the in-scope commit, falling back to the branch overview on the
-		// working-tree row (no single commit to scope to). `S` (or esc) backs out
-		// to wherever it was opened from.
+		// Toggle the whole-repo Stats dashboard. It belongs to the commit-history
+		// view (a repo-wide summary), so it's only reachable from there — not from a
+		// commit drill-in or the branch diff. `S` (or esc) backs out to the history.
 		switch m.mode {
 		case viewOverview:
 			m.exitOverview()
-		case viewBranch:
+		case viewLog:
 			return m, m.enterOverview()
-		case viewLog, viewCommit:
-			return m, m.enterCommitOverview()
 		}
 		return m, nil
 
@@ -452,9 +451,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.focus = focusDiff
 		return m, nil
 	case "enter", "o":
-		// Overview: open the highlighted file in the normal branch diff view.
+		// The Stats dashboard is read-only — nothing to open.
 		if m.mode == viewOverview {
-			m.enterOverviewFile()
 			return m, nil
 		}
 		// History list: enter drills into the highlighted commit's file tree, or
@@ -552,7 +550,7 @@ func (m *model) toggleFocus() {
 func (m *model) moveDown() {
 	switch {
 	case m.mode == viewOverview:
-		m.moveOverviewCursor(1)
+		// read-only dashboard — nothing to move
 	case m.focus != focusFiles:
 		m.moveDiffCursor(1)
 	case m.mode == viewLog:
@@ -565,7 +563,7 @@ func (m *model) moveDown() {
 func (m *model) moveUp() {
 	switch {
 	case m.mode == viewOverview:
-		m.moveOverviewCursor(-1)
+		// read-only dashboard — nothing to move
 	case m.focus != focusFiles:
 		m.moveDiffCursor(-1)
 	case m.mode == viewLog:
@@ -578,7 +576,7 @@ func (m *model) moveUp() {
 func (m *model) gotoTop() {
 	switch {
 	case m.mode == viewOverview:
-		m.overviewCursor = 0
+		// read-only dashboard — nothing to move
 	case m.focus != focusFiles:
 		m.diffCursor = 0
 		m.ensureCursorVisible()
@@ -597,7 +595,7 @@ func (m *model) gotoTop() {
 func (m *model) gotoBottom() {
 	switch {
 	case m.mode == viewOverview:
-		m.overviewCursor = max(0, len(m.files)-1)
+		// read-only dashboard — nothing to move
 	case m.focus != focusFiles:
 		m.diffCursor = m.totalDiffRows() - 1
 		m.ensureCursorVisible()
@@ -690,13 +688,22 @@ func abs(n int) int {
 func (m *model) refresh() {
 	m.base = git.BaseRef(m.repo, m.baseName)
 	m.shortstat = git.Shortstat(m.repo, m.base)
-	m.authorComputed = false // recompute the human/AI split against the new base
-	m.authorComputing = false
+	// The whole-history Summary depends only on committed history, so invalidate
+	// its cached stats only when HEAD actually moved — a working-tree edit (the
+	// common refresh trigger) doesn't change history, and recomputing the full
+	// `git log` on every save would be wasteful on a deep repo.
+	if head := git.HeadSHA(m.repo); head != m.historyHead {
+		m.historyHead = head
+		m.historyComputed = false
+		m.historyComputing = false
+	}
 
-	if m.mode == viewOverview && m.overviewCommit != nil {
-		// A commit overview summarizes an immutable commit; leave the underlying
-		// origin state (including any branch tree stashed by a drill-in) untouched
-		// so backing out of the overview restores it intact.
+	if m.mode == viewOverview {
+		// The full-screen Stats dashboard covers whatever it was opened from — and
+		// that origin may have stashed its own tree (a per-commit drill-in repurposes
+		// m.files). Leave all that origin state untouched so backing out restores it
+		// intact; it re-syncs on the next poll once the dashboard closes. Only the
+		// Stats themselves were refreshed (above).
 		return
 	}
 

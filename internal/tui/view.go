@@ -179,14 +179,10 @@ func (m model) headerView() string {
 		return left + mid + count
 	}
 	if m.mode == viewOverview {
-		if c := m.overviewCommit; c != nil {
-			mid := mutedStyle.Render(fmt.Sprintf("  %s · overview", c.Short))
-			return left + mid + "  " + headingStyle.Render(truncateText(c.Subject, 60))
-		}
-		mid := mutedStyle.Render(fmt.Sprintf("  %s · overview", branchLabel(m.branch)))
+		mid := mutedStyle.Render(fmt.Sprintf("  %s · stats", branchLabel(m.branch)))
 		stat := ""
-		if m.shortstat != "" {
-			stat = "  " + headingStyle.Render(m.shortstat)
+		if m.historyComputed {
+			stat = "  " + headingStyle.Render(fmt.Sprintf("%d commits", m.historyStats.Commits))
 		}
 		return left + mid + stat
 	}
@@ -1195,7 +1191,7 @@ func (m model) footerView() string {
 	switch m.mode {
 	case viewOverview:
 		keys = []string{
-			"j/k move", "↵ open file", "S/esc back", "t theme", "? help", "q quit",
+			"S/esc back", "t theme", "? help", "q quit",
 		}
 		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewLog:
@@ -1207,14 +1203,14 @@ func (m model) footerView() string {
 		if !m.onBaseBranch() {
 			keys = append(keys, "D "+m.branchDiffLabel())
 		}
-		keys = append(keys, "d details", "S summary", "t theme", "? help", "q quit")
+		keys = append(keys, "d details", "S stats", "t theme", "? help", "q quit")
 	case viewCommit:
 		keys = []string{
-			"j/k move", "h/l ⇄ pane", "↵ open", "f find", "/ search", "d details", "S summary", "[ ] sidebar", "s split", "t theme", "esc back", "? help", "q quit",
+			"j/k move", "h/l ⇄ pane", "↵ open", "f find", "/ search", "d details", "[ ] sidebar", "s split", "t theme", "esc back", "? help", "q quit",
 		}
 	default:
 		keys = []string{
-			"j/k move", "h/l ⇄ pane", "↵ open/expand", "f find", "/ search", "[ ] sidebar", "S overview", "s split", "t theme", "L history", "? help", "q quit",
+			"j/k move", "h/l ⇄ pane", "↵ open/expand", "f find", "/ search", "[ ] sidebar", "s split", "t theme", "L history", "? help", "q quit",
 		}
 	}
 	footer := mutedStyle.Render(strings.Join(keys, "  ·  "))
@@ -1258,6 +1254,7 @@ func (m model) helpBox() string {
 		"  Tab          toggle the selected diff on the right half on / off",
 		"  Enter        open the commit's (or working tree's) files",
 		"  d            inspect the selected commit (author, date, full message)",
+		"  S            whole-repo Stats — commit count + per-author ranking",
 		"  ○ local      the working tree: staged + unstaged changes",
 		"  L            return to the history view from anywhere",
 		"  Esc          close the diff pane, then step back (commit tree → history)",
@@ -1271,8 +1268,6 @@ func (m model) helpBox() string {
 		lines = append(lines, "  D            aggregated "+label+" (file tree + diff)")
 	}
 	lines = append(lines,
-		"  S            toggle the overview (churn bars + languages) — branch-wide,",
-		"               or scoped to the selected commit from the history",
 		"",
 		headingStyle.Render("  view"),
 		"  s            toggle unified / side-by-side",
