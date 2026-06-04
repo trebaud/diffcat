@@ -91,6 +91,12 @@ type model struct {
 	// indexes shift by one (see logRowCount/onWorkingRow/commitIndex).
 	logWorking bool
 
+	// logDiffOpen toggles the history view's diff pane. It starts closed, so the
+	// commit list fills the whole screen — the primary thing the reader wants —
+	// and `l`/Tab/→ opens the highlighted commit's diff on the right half (Esc
+	// closes it). While closed, scrolling the list skips the per-commit diff load.
+	logDiffOpen bool
+
 	// workingCount is the number of files with uncommitted changes (against HEAD:
 	// staged + unstaged + untracked) — what the working-tree row summarizes and
 	// what gates logWorking. It's distinct from len(m.files), which counts the
@@ -518,8 +524,10 @@ func (m model) listViewportHeight() int {
 // trades the diff some room for the commit list's extra metadata, but is clamped
 // so the diff never drops below a readable minimum.
 func (m model) sidebarWidth() int {
-	// The commit-history view pins the sidebar to ~half the pane: the commit list
-	// is the primary content there, so it's neither collapsible nor resizable.
+	// The commit-history view pins the sidebar to ~half the pane once the diff is
+	// opened: the commit list is the primary content there, so it's neither
+	// collapsible nor resizable. (While the diff is closed the list fills the whole
+	// width — render() handles that case before consulting this width.)
 	if m.mode == viewLog {
 		w := m.width / 2
 		if maxW := m.width - 1 - 28; w > maxW {

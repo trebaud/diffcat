@@ -71,23 +71,27 @@ func (m model) render() string {
 	}
 	fill := lipgloss.NewStyle().Height(bodyHeight).MaxHeight(bodyHeight)
 
-	var right string
-	if m.mode == viewLog {
-		right = fill.Render(m.commitDiffView(diffWidth))
-	} else {
-		right = fill.Render(m.diffView(diffWidth))
-	}
-
 	var body string
-	if listWidth == 0 {
+	switch {
+	case m.mode == viewLog && !m.logDiffOpen:
+		// History view, diff pane closed (the default): the commit list fills the
+		// whole body. `l`/Tab/→ opens the diff on the right half; Esc closes it.
+		body = fill.Render(m.commitListView(m.width))
+	case listWidth == 0:
 		// Sidebar collapsed: the diff pane is the entire body.
-		body = right
-	} else {
-		var left string
+		if m.mode == viewLog {
+			body = fill.Render(m.commitDiffView(diffWidth))
+		} else {
+			body = fill.Render(m.diffView(diffWidth))
+		}
+	default:
+		var left, right string
 		if m.mode == viewLog {
 			left = fill.Render(m.commitListView(listWidth))
+			right = fill.Render(m.commitDiffView(diffWidth))
 		} else {
 			left = fill.Render(m.listView(listWidth))
+			right = fill.Render(m.diffView(diffWidth))
 		}
 		body = lipgloss.JoinHorizontal(lipgloss.Top, left, m.divider(bodyHeight), right)
 	}
@@ -1195,7 +1199,11 @@ func (m model) footerView() string {
 		}
 		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewLog:
-		keys = []string{"j/k select", "h/l ⇄ pane", "↵ open"}
+		if m.logDiffOpen {
+			keys = []string{"j/k select", "h/l ⇄ pane", "Tab hide diff", "↵ open commit"}
+		} else {
+			keys = []string{"j/k select", "Tab diff", "↵ open commit"}
+		}
 		if !m.onBaseBranch() {
 			keys = append(keys, "D "+m.branchDiffLabel())
 		}
@@ -1246,12 +1254,13 @@ func (m model) helpBox() string {
 		"  /            search the open diff (n / N jump between matches)",
 		"",
 		headingStyle.Render("  history (the default view)"),
-		"  j / k        move between entries, preview each diff",
+		"  j / k        move between entries (the list fills the screen)",
+		"  Tab          toggle the selected diff on the right half on / off",
 		"  Enter        open the commit's (or working tree's) files",
 		"  d            inspect the selected commit (author, date, full message)",
 		"  ○ local      the working tree: staged + unstaged changes",
 		"  L            return to the history view from anywhere",
-		"  Esc          step back one level (commit tree → history)",
+		"  Esc          close the diff pane, then step back (commit tree → history)",
 		"",
 		headingStyle.Render("  branch diff"),
 	}

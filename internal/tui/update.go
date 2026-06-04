@@ -258,7 +258,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Esc only steps back one level toward the history view (the default): a
 		// per-commit (or working-tree) drill-in → the history list; the overview →
 		// wherever it was opened from (the branch diff, the history list, or the
-		// per-commit tree). On the history view, the home screen, it does nothing —
+		// per-commit tree). On the history view it closes the diff pane (back to the
+		// full-screen commit list), or does nothing when that's already the state —
 		// use q / ctrl+c to quit.
 		switch m.mode {
 		case viewCommit:
@@ -267,6 +268,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.enterLog()
 		case viewOverview:
 			m.exitOverview()
+		case viewLog:
+			if m.logDiffOpen {
+				m.closeLogDiff()
+			}
 		}
 		return m, nil
 
@@ -431,11 +436,19 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "h", "left":
 		// With the sidebar collapsed there's no list to focus — stay on the diff.
+		// (In the history view the sidebar is always present; focus the commit list
+		// while leaving the diff pane open.)
 		if m.sidebar != sidebarHidden {
 			m.focus = focusFiles
 		}
 		return m, nil
 	case "l", "right":
+		// In the history view the diff pane is closed by default; `l`/→ opens it on
+		// the right half and focuses it (Esc/h closes/leaves it).
+		if m.mode == viewLog && !m.logDiffOpen {
+			m.openLogDiff()
+			return m, nil
+		}
 		m.focus = focusDiff
 		return m, nil
 	case "enter", "o":
@@ -510,6 +523,17 @@ func (m *model) toggleTheme() {
 }
 
 func (m *model) toggleFocus() {
+	// History view: Tab toggles the diff pane on/off — open it (focusing it) when
+	// closed, hand the whole width back to the commit list when open. Focus moves
+	// between the two panes with h/l.
+	if m.mode == viewLog {
+		if m.logDiffOpen {
+			m.closeLogDiff()
+		} else {
+			m.openLogDiff()
+		}
+		return
+	}
 	// A collapsed sidebar has nothing to focus, so the diff stays the only target.
 	if m.sidebar == sidebarHidden {
 		m.focus = focusDiff
@@ -560,7 +584,9 @@ func (m *model) gotoTop() {
 		m.ensureCursorVisible()
 	case m.mode == viewLog:
 		m.commitCursor = 0
-		m.loadCommitDiff()
+		if m.logDiffOpen {
+			m.loadCommitDiff()
+		}
 	default:
 		m.cursor = 0
 		m.snapCursorToFile()
@@ -577,7 +603,9 @@ func (m *model) gotoBottom() {
 		m.ensureCursorVisible()
 	case m.mode == viewLog:
 		m.commitCursor = max(0, m.logRowCount()-1)
-		m.loadCommitDiff()
+		if m.logDiffOpen {
+			m.loadCommitDiff()
+		}
 	default:
 		m.cursor = max(0, len(m.rows)-1)
 		m.snapCursorToFile()

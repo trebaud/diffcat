@@ -81,7 +81,25 @@ func (m *model) enterLog() {
 	m.mode = viewLog
 	m.focus = focusFiles
 	m.commitCursor = 0
+	// The diff pane starts closed, so the commit list fills the screen. Its diff
+	// is loaded lazily when the reader opens the pane (openLogDiff), not here.
+	m.logDiffOpen = false
+}
+
+// openLogDiff reveals the history view's diff pane on the right half and moves
+// focus to it, loading the highlighted commit's diff (deferred while the pane
+// was closed). It's the keymap target for `l`/→/Tab from the full-screen list.
+func (m *model) openLogDiff() {
+	m.logDiffOpen = true
+	m.focus = focusDiff
 	m.loadCommitDiff()
+}
+
+// closeLogDiff hides the diff pane, handing the whole width back to the commit
+// list and returning focus there.
+func (m *model) closeLogDiff() {
+	m.logDiffOpen = false
+	m.focus = focusFiles
 }
 
 // refreshWorkingCount recomputes the uncommitted-change count (against HEAD) and
@@ -180,7 +198,10 @@ func (m *model) exitCommit() {
 	m.branchRows = nil
 	m.mode = viewLog
 	m.focus = focusFiles
-	m.loadCommitDiff()
+	// Re-preview only when the diff pane is open; closed, the list is full-screen.
+	if m.logDiffOpen {
+		m.loadCommitDiff()
+	}
 }
 
 // baseHistoryLimit caps how many of the base branch's commits are shown below
@@ -215,7 +236,11 @@ func (m *model) moveCommitCursor(delta int) {
 	if m.commitCursor >= m.logRowCount() {
 		m.commitCursor = m.logRowCount() - 1
 	}
-	m.loadCommitDiff()
+	// Skip the per-commit diff load while the pane is closed — there's nothing to
+	// show, and openLogDiff loads it on demand when the reader opens the pane.
+	if m.logDiffOpen {
+		m.loadCommitDiff()
+	}
 }
 
 // loadCommitDiff parses the diff for the highlighted commit into the shared diff

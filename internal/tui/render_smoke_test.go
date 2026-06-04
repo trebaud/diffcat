@@ -159,7 +159,12 @@ func TestRenderNoWrap(t *testing.T) {
 	wideLog := logSampleModel()
 	wideLog.sidebar = sidebarWide
 	wideLog.commits[0].Tags = []string{"v1.2.0", "v1.1.0"}
-	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewEmpty, commitOverview, aiOverview, searched, searchPrompt, finding, hiddenSidebar, wideLog} {
+	// The history view with the diff pane opened on the right half (the default is
+	// closed, exercised by logSampleModel above).
+	openLog := logSampleModel()
+	openLog.logDiffOpen = true
+	openLog.focus = focusDiff
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewEmpty, commitOverview, aiOverview, searched, searchPrompt, finding, hiddenSidebar, wideLog} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -191,7 +196,9 @@ func TestFullScreenFill(t *testing.T) {
 	wideLog := logSampleModel()
 	wideLog.sidebar = sidebarWide
 	wideLog.commits[0].Tags = []string{"v1.2.0"}
-	for _, m := range []model{sampleModel(), logSampleModel(), workingLog, commitSampleModel(), overview, commitOverview, hiddenSidebar, wideLog} {
+	openLog := logSampleModel()
+	openLog.logDiffOpen = true
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, commitSampleModel(), overview, commitOverview, hiddenSidebar, wideLog} {
 		m.focus = focusDiff
 		for _, split := range []bool{false, true} {
 			m.splitView = split
