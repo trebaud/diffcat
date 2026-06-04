@@ -322,3 +322,76 @@ func TestCommitAIAgent(t *testing.T) {
 		}
 	}
 }
+
+// TestHistoryReductions checks the pure reductions the Stats dashboard charts
+// draw from: hour-of-day and weekday rollups of the punch card, streak/cadence
+// stats from the daily series, the human/AI split, and author concentration.
+func TestHistoryReductions(t *testing.T) {
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC) // a Thursday
+	hs := HistoryStats{
+		Commits: 10,
+		Authors: []AuthorShare{
+			{Name: "Claude", Commits: 6, AI: true},
+			{Name: "Ada", Commits: 3},
+			{Name: "Bob", Commits: 1},
+		},
+		Start: start,
+		// Daily: a 3-day streak, a gap, then a 2-day streak ending the series.
+		Daily: []DayCount{
+			{Human: 1},
+			{Human: 2, AI: 1}, // busiest day: 3 commits, index 1
+			{Human: 1},
+			{}, // gap
+			{Human: 1},
+			{AI: 1},
+		},
+	}
+	// Punch: Monday(1) gets two commits at 09h, Wednesday(3) one at 14h.
+	hs.Punch[1][9] = 2
+	hs.Punch[3][14] = 1
+
+	if h := hs.HourOfDay(); h[9] != 2 || h[14] != 1 || h[0] != 0 {
+		t.Errorf("HourOfDay 9h/14h/0h = %d/%d/%d, want 2/1/0", h[9], h[14], h[0])
+	}
+	if w := hs.WeekdayTotals(); w[1] != 2 || w[3] != 1 || w[0] != 0 {
+		t.Errorf("WeekdayTotals Mon/Wed/Sun = %d/%d/%d, want 2/1/0", w[1], w[3], w[0])
+	}
+
+	if longest, current := hs.Streaks(); longest != 3 || current != 2 {
+		t.Errorf("Streaks = %d/%d, want longest 3, current 2", longest, current)
+	}
+	if day, count := hs.BusiestDay(); count != 3 || !day.Equal(start.AddDate(0, 0, 1)) {
+		t.Errorf("BusiestDay = %s/%d, want 2026-01-02/3", day.Format("2006-01-02"), count)
+	}
+	if pw := hs.CommitsPerWeek(); pw != 10.0 { // 10 commits / (6 days -> clamped to 1 week)
+		t.Errorf("CommitsPerWeek = %.2f, want 10", pw)
+	}
+
+	if human, ai := hs.HumanAICommits(); human != 4 || ai != 6 {
+		t.Errorf("HumanAICommits = %d/%d, want 4/6", human, ai)
+	}
+	if top, bus := hs.Concentration(); top != 60 || bus != 1 {
+		t.Errorf("Concentration = %d%%/%d, want 60%%/1", top, bus)
+	}
+}
+
+// TestHistoryReductionsEmpty checks the reductions degrade cleanly on an empty
+// history rather than panicking (e.g. dividing by a zero total).
+func TestHistoryReductionsEmpty(t *testing.T) {
+	var hs HistoryStats
+	if h := hs.HourOfDay(); h != [24]int{} {
+		t.Errorf("empty HourOfDay = %v, want zeroes", h)
+	}
+	if longest, current := hs.Streaks(); longest != 0 || current != 0 {
+		t.Errorf("empty Streaks = %d/%d, want 0/0", longest, current)
+	}
+	if day, count := hs.BusiestDay(); !day.IsZero() || count != 0 {
+		t.Errorf("empty BusiestDay = %s/%d, want zero/0", day, count)
+	}
+	if pw := hs.CommitsPerWeek(); pw != 0 {
+		t.Errorf("empty CommitsPerWeek = %.2f, want 0", pw)
+	}
+	if top, bus := hs.Concentration(); top != 0 || bus != 0 {
+		t.Errorf("empty Concentration = %d/%d, want 0/0", top, bus)
+	}
+}

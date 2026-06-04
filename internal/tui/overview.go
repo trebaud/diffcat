@@ -6,8 +6,9 @@ import (
 
 // overview.go holds the Stats dashboard (viewOverview, toggled with `S`): a
 // summary of the whole repo: a scrollable per-author commit ranking (each human
-// author and each AI agent its own row) on the left, with activity charts on the
-// right, across every commit reachable from HEAD. It's deliberately diff-free so
+// author and each AI agent its own row) on the left, with the contribution
+// calendar and the remaining activity charts on the right, across every commit
+// reachable from HEAD. It's deliberately diff-free so
 // it stays fast on a deep history. Entering/leaving the mode lives here; rendering
 // is in overview_view.go. Only the author ranking scrolls (j/k); the charts don't.
 

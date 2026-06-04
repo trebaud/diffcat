@@ -12,9 +12,11 @@ import (
 
 // overview_view.go renders the Stats dashboard (viewOverview): a full-width
 // header and title, then a two-pane body — the scrollable per-author commit
-// ranking on the left, the activity charts (AI adoption, commit timeline, day×hour
-// heatmap) spread down the right. No file list — the dashboard is intentionally
-// diff-free so it stays fast on a deep history.
+// ranking on the left, and on the right the contribution calendar spanning the
+// full right section on top with the remaining activity charts (AI adoption,
+// commit timeline, day×hour heatmap, …) gridded smaller beneath it. On a short
+// pane the calendar folds back into the grid. No file list — the dashboard is
+// intentionally diff-free so it stays fast on a deep history.
 
 // Layout constants for the two-pane body. The author pane is wide enough for a
 // full ranking row ("name  ▇▇▇░░░  100%  NNNNNN commits"); the charts need at
@@ -22,13 +24,33 @@ import (
 // the body falls back to a single full-width author column (charts dropped).
 const (
 	overviewAuthorPaneWidth = 54
-	overviewMinChartWidth   = 34
+	overviewMinChartWidth   = 30
 )
 
 // overviewTwoPane reports whether the screen is wide enough for the side-by-side
 // author-ranking / charts layout (else the author ranking goes full-width).
 func (m model) overviewTwoPane() bool {
 	return m.width >= overviewAuthorPaneWidth+1+overviewMinChartWidth
+}
+
+// minGridChartRows is the smallest chart grid worth keeping beneath the
+// contribution calendar at the top of the right pane; under it the calendar folds
+// back into the grid so a short pane isn't left with a stub of charts.
+const minGridChartRows = 5
+
+// overviewCharts builds the right pane: the contribution calendar spanning the
+// full pane width on top, then the remaining charts packed into the smaller grid
+// below it. When the pane is too short to spare the calendar's rows plus a usable
+// grid (or there's no dated activity), the calendar rides in the grid like any
+// other chart instead. Returns exactly height lines.
+func (m model) overviewCharts(hs git.HistoryStats, width, height int) []string {
+	contrib := contributionBlock(hs, width, 1)
+	if contrib == nil || height < len(contrib)+1+minGridChartRows {
+		return m.chartGrid(hs, width, height, true)
+	}
+	out := append([]string{}, contrib...)
+	out = append(out, "") // blank between the calendar and the charts below
+	return append(out, m.chartGrid(hs, width, height-len(out), false)...)
 }
 
 // overviewPaneHeight is the height of the two-pane region: the body (between
@@ -113,7 +135,7 @@ func (m model) overviewBody(width, height int) []string {
 	leftW := overviewAuthorPaneWidth
 	rightW := width - leftW - 1
 	left := m.authorList(hs, total, paneHeight)
-	right := m.chartColumn(hs, rightW, paneHeight)
+	right := m.overviewCharts(hs, rightW, paneHeight)
 	div := borderStyle.Render("│")
 	for i := 0; i < paneHeight; i++ {
 		var l, r string
@@ -150,71 +172,6 @@ func (m model) authorList(hs git.HistoryStats, total, height int) []string {
 	out := []string{headingStyle.Render(heading)}
 	for i := start; i < end; i++ {
 		out = append(out, authorRow(authors[i], total))
-	}
-	return out
-}
-
-// chartColumn is the right pane: the AI-adoption curve, commit-activity timeline,
-// and day×hour heatmap, spread evenly down the available height. Charts that don't
-// fit (heatmap first, it's last) are dropped.
-func (m model) chartColumn(hs git.HistoryStats, width, height int) []string {
-	var blocks [][]string
-	if hs.HasAI {
-		if b := adoptionBlock(hs, width); b != nil {
-			blocks = append(blocks, b)
-		}
-	}
-	if b := timelineBlock(hs, width); b != nil {
-		blocks = append(blocks, b)
-	}
-	if b := heatmapBlock(hs, width); b != nil {
-		blocks = append(blocks, b)
-	}
-	return stackSpread(blocks, height)
-}
-
-// stackSpread lays blocks out down exactly height lines with even blank gaps above,
-// between, and below them — so the charts use the full pane rather than clustering
-// at the top. Trailing blocks are dropped until the rest fit with a gap each.
-func stackSpread(blocks [][]string, height int) []string {
-	for len(blocks) > 0 {
-		content := 0
-		for _, b := range blocks {
-			content += len(b)
-		}
-		if content+(len(blocks)-1) <= height {
-			break
-		}
-		blocks = blocks[:len(blocks)-1]
-	}
-	if len(blocks) == 0 {
-		return make([]string, height)
-	}
-
-	content := 0
-	for _, b := range blocks {
-		content += len(b)
-	}
-	regions := len(blocks) + 1 // above, between each, below
-	gap, extra := (height-content)/regions, (height-content)%regions
-	gapAt := func(region int) []string {
-		n := gap
-		if region < extra {
-			n++
-		}
-		return make([]string, n)
-	}
-
-	out := gapAt(0)
-	for i, b := range blocks {
-		out = append(out, b...)
-		out = append(out, gapAt(i+1)...)
-	}
-	if len(out) > height {
-		out = out[:height]
-	}
-	for len(out) < height {
-		out = append(out, "")
 	}
 	return out
 }
@@ -419,8 +376,17 @@ func heatmapBlock(hs git.HistoryStats, width int) []string {
 // heatCell renders one punch-card cell: a faint dot for an empty hour, else one of
 // four shade blocks (green) scaled to peak, the busiest hour in the grid.
 func heatCell(v, peak int) string {
+	return heatCellWidth(v, peak, 1)
+}
+
+// heatCellWidth is heatCell drawn w columns wide — the contribution hero uses w=2
+// so its cells read as chunky GitHub-style squares rather than thin slivers.
+func heatCellWidth(v, peak, w int) string {
+	if w < 1 {
+		w = 1
+	}
 	if v <= 0 {
-		return borderStyle.Render("·")
+		return borderStyle.Render(strings.Repeat("·", w))
 	}
 	shades := []rune("░▒▓█")
 	lvl := v * len(shades) / peak
@@ -430,7 +396,264 @@ func heatCell(v, peak int) string {
 	if lvl > len(shades) {
 		lvl = len(shades)
 	}
-	return addedStyle.Render(string(shades[lvl-1]))
+	return addedStyle.Render(strings.Repeat(string(shades[lvl-1]), w))
+}
+
+// contributionBlock is the GitHub-style contribution calendar: weeks as columns,
+// seven weekday rows (Sun–Sat), each cell shaded by that day's commit count via
+// heatCellWidth, scaled to the busiest day in view. Each cell is cellW columns
+// wide (the full-width hero uses 2 for chunky squares; the grid fallback uses 1).
+// Columns align to the week of the first commit (Start.Weekday()); only the
+// trailing weeks that fit width are shown. A month-abbreviation ruler labels where
+// each month begins. Returns nil if too narrow or there's no dated activity.
+func contributionBlock(hs git.HistoryStats, width, cellW int) []string {
+	const prefix = 6 // "  Sun " — 2 indent + 3 label + 1 space
+	if cellW < 1 {
+		cellW = 1
+	}
+	avail := (width - prefix) / cellW
+	if avail < 6 || len(hs.Daily) == 0 {
+		return nil
+	}
+	offset := int(hs.Start.Weekday()) // column 0 begins on the week containing Start
+	totalWeeks := (offset + len(hs.Daily) + 6) / 7
+	if totalWeeks < 1 {
+		return nil
+	}
+	if avail > totalWeeks {
+		avail = totalWeeks
+	}
+	startWeek := totalWeeks - avail // show the trailing `avail` weeks
+
+	// grid holds each visible day's commit count; present marks which cells map to a
+	// real calendar day (so the ragged first/last weeks render as blanks, not dots).
+	var grid, present [7][]int
+	for wd := 0; wd < 7; wd++ {
+		grid[wd] = make([]int, avail)
+		present[wd] = make([]int, avail)
+	}
+	peak := 0
+	for i, d := range hs.Daily {
+		col := (offset+i)/7 - startWeek
+		if col < 0 || col >= avail {
+			continue
+		}
+		wd := (offset + i) % 7
+		grid[wd][col] = d.Human + d.AI
+		present[wd][col] = 1
+		peak = max(peak, grid[wd][col])
+	}
+
+	// Month ruler: a 3-letter abbreviation at the column where each month first
+	// appears across the visible week starts. Collect candidates first, then drop
+	// any whose label would overrun the next one — which only happens for a leading
+	// partial week (e.g. a Dec 28 column one week before Jan), so the throwaway
+	// partial-month label is the one dropped.
+	type monthMark struct {
+		col   int
+		label string
+	}
+	var marks []monthMark
+	prevMonth := time.Month(0)
+	for col := 0; col < avail; col++ {
+		ws := hs.Start.AddDate(0, 0, (startWeek+col)*7-offset)
+		if m := ws.Month(); m != prevMonth {
+			prevMonth = m
+			marks = append(marks, monthMark{col, ws.Format("Jan")})
+		}
+	}
+	ruler := []rune(strings.Repeat(" ", avail*cellW))
+	for i, mk := range marks {
+		if i+1 < len(marks) && (marks[i+1].col-mk.col)*cellW < len(mk.label) {
+			continue // its label would collide with the next month's — drop it
+		}
+		for k, c := range mk.label {
+			if pos := mk.col*cellW + k; pos < len(ruler) {
+				ruler[pos] = c
+			}
+		}
+	}
+
+	out := []string{
+		headingStyle.Render("  Contribution graph"),
+		strings.Repeat(" ", prefix) + mutedStyle.Render(string(ruler)),
+	}
+	labels := []string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
+	for wd := 0; wd < 7; wd++ {
+		var b strings.Builder
+		b.WriteString("  " + mutedStyle.Render(labels[wd]) + " ")
+		for col := 0; col < avail; col++ {
+			if present[wd][col] == 0 {
+				b.WriteString(strings.Repeat(" ", cellW))
+				continue
+			}
+			b.WriteString(heatCellWidth(grid[wd][col], peak, cellW))
+		}
+		out = append(out, b.String())
+	}
+	return out
+}
+
+// timeOfDayBlock is the time-of-day rhythm: a 24-hour sparkline of commits summed
+// across every weekday, an hour ruler, and a caption naming the peak hour and the
+// share of commits landing after midnight. Returns nil if too narrow or empty.
+func timeOfDayBlock(hs git.HistoryStats, width int) []string {
+	if width-2 < 24 {
+		return nil
+	}
+	hours := hs.HourOfDay()
+	total, peak, peakHr, night := 0, 0, 0, 0
+	for h, v := range hours {
+		total += v
+		if v > peak {
+			peak, peakHr = v, h
+		}
+		if h < 6 {
+			night += v
+		}
+	}
+	if total == 0 {
+		return nil
+	}
+	ruler := []rune(strings.Repeat(" ", 24))
+	for _, mk := range []struct {
+		at  int
+		lbl string
+	}{{0, "0"}, {6, "6"}, {12, "12"}, {18, "18"}} {
+		for i, c := range mk.lbl {
+			if mk.at+i < 24 {
+				ruler[mk.at+i] = c
+			}
+		}
+	}
+	return []string{
+		headingStyle.Render("  Time of day"),
+		"  " + addedStyle.Render(sparklineMax(hours[:], peak)),
+		strings.Repeat(" ", 2) + mutedStyle.Render(string(ruler)),
+		mutedStyle.Render(fmt.Sprintf("  peak %dh · %d%% after midnight", peakHr, sharePct(night, total))),
+	}
+}
+
+// weekdayBlock is the per-weekday rollup: seven horizontal bars (Mon–Sun) of
+// commits summed across hours, scaled to the busiest weekday, with the count
+// suffixed. Returns nil if too narrow or there's no activity.
+func weekdayBlock(hs git.HistoryStats, width int) []string {
+	totals := hs.WeekdayTotals()
+	peak := 0
+	for _, v := range totals {
+		peak = max(peak, v)
+	}
+	if peak == 0 {
+		return nil
+	}
+	const prefix = 6 // "  Mon "
+	barW := width - prefix - len(fmt.Sprintf(" %d", peak))
+	if barW < 6 {
+		return nil
+	}
+	if barW > 18 {
+		barW = 18
+	}
+	out := []string{headingStyle.Render("  By weekday")}
+	for _, wd := range []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday, time.Saturday, time.Sunday} {
+		v := totals[int(wd)]
+		filled := v * barW / peak
+		if v > 0 && filled == 0 {
+			filled = 1
+		}
+		bar := addedStyle.Render(strings.Repeat("█", filled)) + borderStyle.Render(strings.Repeat("░", barW-filled))
+		out = append(out, "  "+mutedStyle.Render(wd.String()[:3])+" "+bar+mutedStyle.Render(fmt.Sprintf(" %d", v)))
+	}
+	return out
+}
+
+// humanAIBlock is the overall human-vs-AI split as one proportion bar (green human
+// run, accent AI run) with a percentage caption. Returns nil with no commits; the
+// caller only shows it when the repo has AI activity.
+func humanAIBlock(hs git.HistoryStats, width int) []string {
+	human, ai := hs.HumanAICommits()
+	total := human + ai
+	if total == 0 {
+		return nil
+	}
+	barW := width - 2
+	if barW < 8 {
+		return nil
+	}
+	if barW > 40 {
+		barW = 40
+	}
+	h := human * barW / total
+	if human > 0 && h == 0 {
+		h = 1
+	}
+	if h > barW {
+		h = barW
+	}
+	bar := addedStyle.Render(strings.Repeat("█", h)) + titleStyle.Render(strings.Repeat("█", barW-h))
+	return []string{
+		headingStyle.Render("  Human vs AI"),
+		"  " + bar,
+		mutedStyle.Render(fmt.Sprintf("  human %d%% · ai %d%%", sharePct(human, total), sharePct(ai, total))),
+	}
+}
+
+// streakBlock is the streak & cadence card: longest and current commit streaks,
+// the busiest single day, and the average commits per week — all from the daily
+// series. Returns nil if there's no dated activity.
+func streakBlock(hs git.HistoryStats, width int) []string {
+	if len(hs.Daily) == 0 {
+		return nil
+	}
+	longest, current := hs.Streaks()
+	day, busiest := hs.BusiestDay()
+	dayWord := "days"
+	if longest == 1 {
+		dayWord = "day"
+	}
+	out := []string{
+		headingStyle.Render("  Streak & cadence"),
+		"  " + addedStyle.Render(fmt.Sprintf("longest %d %s", longest, dayWord)) +
+			mutedStyle.Render(fmt.Sprintf(" · now %d", current)),
+	}
+	if busiest > 0 {
+		out = append(out, mutedStyle.Render(fmt.Sprintf("  busiest %s · %d commits", day.Format("Jan 2"), busiest)))
+	}
+	return append(out, mutedStyle.Render(fmt.Sprintf("  ~%.0f commits / week", hs.CommitsPerWeek())))
+}
+
+// concentrationBlock is the authorship-concentration card: a bar of the top
+// author's share plus the bus factor (authors making up half the commits).
+// Returns nil if there are no authors.
+func concentrationBlock(hs git.HistoryStats, width int) []string {
+	if len(hs.Authors) == 0 {
+		return nil
+	}
+	topPct, busFactor := hs.Concentration()
+	barW := width - 2
+	if barW < 8 {
+		return nil
+	}
+	if barW > 24 {
+		barW = 24
+	}
+	filled := topPct * barW / 100
+	if topPct > 0 && filled == 0 {
+		filled = 1
+	}
+	if filled > barW {
+		filled = barW
+	}
+	bar := addedStyle.Render(strings.Repeat("█", filled)) + borderStyle.Render(strings.Repeat("░", barW-filled))
+	word := "authors"
+	if busFactor == 1 {
+		word = "author"
+	}
+	return []string{
+		headingStyle.Render("  Concentration"),
+		"  " + bar + mutedStyle.Render(fmt.Sprintf(" %d%%", topPct)),
+		mutedStyle.Render(fmt.Sprintf("  %d %s = half of commits", busFactor, word)),
+	}
 }
 
 // rebucket aggregates a daily commit series into at most cols evenly-spaced

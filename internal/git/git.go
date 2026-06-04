@@ -915,6 +915,114 @@ func buildDaily(byDay map[time.Time]*DayCount) (time.Time, []DayCount) {
 	return start, daily
 }
 
+// HourOfDay collapses the punch card into per-hour commit counts summed across
+// every weekday — the "what time of day do commits land" distribution.
+func (h HistoryStats) HourOfDay() [24]int {
+	var hours [24]int
+	for d := 0; d < 7; d++ {
+		for hr := 0; hr < 24; hr++ {
+			hours[hr] += h.Punch[d][hr]
+		}
+	}
+	return hours
+}
+
+// WeekdayTotals collapses the punch card into per-weekday commit counts summed
+// across every hour, indexed git-style (0=Sunday..6=Saturday) — callers map to
+// Mon–Sun for display.
+func (h HistoryStats) WeekdayTotals() [7]int {
+	var days [7]int
+	for d := 0; d < 7; d++ {
+		for hr := 0; hr < 24; hr++ {
+			days[d] += h.Punch[d][hr]
+		}
+	}
+	return days
+}
+
+// Streaks reports the longest run of consecutive calendar days with at least one
+// commit, and the current run still alive at the most recent day in the series.
+// Both are zero for an empty history.
+func (h HistoryStats) Streaks() (longest, current int) {
+	run := 0
+	for _, d := range h.Daily {
+		if d.Human+d.AI > 0 {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	return longest, run // run is the trailing streak at the last day
+}
+
+// BusiestDay returns the calendar day with the most commits (human+AI) and that
+// count. Returns a zero time and 0 for a history with no dated days.
+func (h HistoryStats) BusiestDay() (day time.Time, count int) {
+	best := -1
+	for i, d := range h.Daily {
+		if t := d.Human + d.AI; t > count {
+			count, best = t, i
+		}
+	}
+	if best < 0 {
+		return time.Time{}, 0
+	}
+	return h.Start.AddDate(0, 0, best), count
+}
+
+// CommitsPerWeek is the mean commits per week across the history's span (the
+// daily series length), 0 when there are no dated days.
+func (h HistoryStats) CommitsPerWeek() float64 {
+	if len(h.Daily) == 0 {
+		return 0
+	}
+	weeks := float64(len(h.Daily)) / 7
+	if weeks < 1 {
+		weeks = 1
+	}
+	return float64(h.Commits) / weeks
+}
+
+// HumanAICommits splits the author ranking into total human- and AI-authored
+// commit counts.
+func (h HistoryStats) HumanAICommits() (human, ai int) {
+	for _, a := range h.Authors {
+		if a.AI {
+			ai += a.Commits
+		} else {
+			human += a.Commits
+		}
+	}
+	return human, ai
+}
+
+// Concentration measures how unevenly commits spread across authors: the top
+// author's share as a rounded percentage, and how many of the top-ranked authors
+// it takes to account for more than half of all commits (the "bus factor"). Both
+// are 0 for an empty history. Authors is assumed sorted by commit count desc.
+func (h HistoryStats) Concentration() (topPct, authorsForMajority int) {
+	total := 0
+	for _, a := range h.Authors {
+		total += a.Commits
+	}
+	if total == 0 {
+		return 0, 0
+	}
+	topPct = int(float64(h.Authors[0].Commits)/float64(total)*100 + 0.5)
+	cum := 0
+	for _, a := range h.Authors {
+		cum += a.Commits
+		authorsForMajority++
+		if cum*2 > total {
+			break
+		}
+	}
+	return topPct, authorsForMajority
+}
+
 // Shortstat returns a one-line summary of the whole diff against base, e.g.
 // "5 files changed, 120 insertions(+), 30 deletions(-)". Empty when clean.
 func Shortstat(repo, base string) string {
