@@ -5,11 +5,11 @@ import (
 )
 
 // overview.go holds the Stats dashboard (viewOverview, toggled with `S`): a
-// full-screen summary of the whole repo — the total commit count and a per-author
-// ranking by commits (each human author and each AI agent its own row), across
-// every commit reachable from HEAD. It's deliberately diff-free so it stays fast
-// on a deep history. Entering/leaving the mode lives here; rendering is in
-// overview_view.go. The view is read-only — there's nothing to scroll or open.
+// summary of the whole repo: a scrollable per-author commit ranking (each human
+// author and each AI agent its own row) on the left, with activity charts on the
+// right, across every commit reachable from HEAD. It's deliberately diff-free so
+// it stays fast on a deep history. Entering/leaving the mode lives here; rendering
+// is in overview_view.go. Only the author ranking scrolls (j/k); the charts don't.
 
 // enterOverview switches into the whole-repo Stats. The underlying `git log` walk
 // can still take a moment on a very deep history, so it's computed in the
@@ -19,6 +19,7 @@ import (
 func (m *model) enterOverview() tea.Cmd {
 	m.mode = viewOverview
 	m.focus = focusFiles
+	m.overviewScroll = 0
 	return m.ensureHistory()
 }
 

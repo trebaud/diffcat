@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 // IsRepo returns true if path is inside a git work tree.
@@ -686,10 +687,12 @@ func (c authorCommit) agent() string {
 // or co-author fields.
 func (c authorCommit) isAIAuthored() bool { return c.agent() != "" }
 
-// authorshipFormat frames one line per commit: author, email, and the (possibly
-// multiple, %x1f-joined) Co-authored-by values. Leading %x1e (RS) marks each
-// commit so records split unambiguously regardless of trailing newlines.
-const authorshipFormat = "--pretty=format:%x1e%an%x1f%ae%x1f%(trailers:key=Co-authored-by,valueonly,separator=%x1f)"
+// authorshipFormat frames one line per commit: the author date (strict ISO-8601),
+// author, email, and the (possibly multiple, %x1f-joined) Co-authored-by values.
+// Leading %x1e (RS) marks each commit so records split unambiguously regardless of
+// trailing newlines. The date is its own %x1f field, so the spaces inside it don't
+// disturb the field split.
+const authorshipFormat = "--pretty=format:%x1e%aI%x1f%an%x1f%ae%x1f%(trailers:key=Co-authored-by,valueonly,separator=%x1f)"
 
 // AuthorShare is one bucket of the commit count: either a named AI coding agent
 // (e.g. "Claude", detected via aiAgentMarkers) or an individual human author (by
@@ -712,18 +715,47 @@ func sortAuthorShares(shares []AuthorShare) {
 	})
 }
 
+// DayCount is one calendar day's non-merge commit count, split into human- and
+// AI-authored. The Daily series is indexed by day-offset from HistoryStats.Start.
+type DayCount struct {
+	Human int
+	AI    int
+}
+
 // HistoryStats summarizes everything reachable from a revision: the non-merge
-// commit count and a per-author ranking by commit count (each human author and
-// each AI agent its own bucket). It backs the whole-repo Stats dashboard.
+// commit count, a per-author ranking by commit count (each human author and each
+// AI agent its own bucket), and time-series the Stats dashboard visualizes. It
+// backs the whole-repo Stats dashboard.
 //
 // Deliberately churn-free: it's gathered from a plain `git log` with no diff
 // stat, so git never has to diff any commit — the cheap commit walk stays fast
 // even on a deep history, where `--numstat`/`--shortstat` (which diff every
-// commit) would be the bottleneck.
+// commit) would be the bottleneck. The time-series below are derived from the
+// author date that the same single walk already formats, so they cost nothing
+// extra; render re-buckets the daily resolution down to the screen width.
 type HistoryStats struct {
 	Commits int
 	Authors []AuthorShare
+
+	// Start is the day of the earliest dated commit (zero if none parsed); Daily
+	// is the per-day human/AI commit split indexed by day-offset from Start.
+	Start time.Time
+	Daily []DayCount
+
+	// Punch is the commit count by author-local weekday (0=Sun..6=Sat) × hour
+	// (0..23) — the punch-card heatmap.
+	Punch [7][24]int
+
+	// FirstAI is the date of the earliest AI-authored commit (HasAI false if none).
+	// RecentAI/RecentTotal give the AI share of the most recent RecentTotal commits.
+	FirstAI     time.Time
+	HasAI       bool
+	RecentAI    int
+	RecentTotal int
 }
+
+// recentWindow is how many of the newest commits the AI-share headline summarizes.
+const recentWindow = 30
 
 // History gathers HistoryStats for everything reachable from rev (e.g. "HEAD")
 // from a single `git log` that only formats author/co-author fields — no diff, so
@@ -751,6 +783,15 @@ func parseHistory(data []byte) HistoryStats {
 	byName := map[string]*acc{}
 	commits := 0
 
+	// Time-series accumulators. byDay keys on midnight-local day; punch counts
+	// weekday×hour. firstAI tracks the earliest AI commit. The log arrives
+	// newest-first, so the first recentWindow records are the most recent commits.
+	byDay := map[time.Time]*DayCount{}
+	var punch [7][24]int
+	var firstAI time.Time
+	hasAI := false
+	recentAI, recentTotal := 0, 0
+
 	for _, rec := range strings.Split(string(data), "\x1e") {
 		rec = strings.Trim(rec, "\n")
 		if rec == "" {
@@ -761,16 +802,20 @@ func parseHistory(data []byte) HistoryStats {
 		if i := strings.IndexByte(rec, '\n'); i >= 0 {
 			header = rec[:i]
 		}
-		f := strings.SplitN(header, "\x1f", 3)
+		f := strings.SplitN(header, "\x1f", 4)
 		var c authorCommit
+		var dateStr string
 		if len(f) > 0 {
-			c.author = f[0]
+			dateStr = f[0]
 		}
 		if len(f) > 1 {
-			c.email = f[1]
+			c.author = f[1]
 		}
 		if len(f) > 2 {
-			c.coauthors = f[2]
+			c.email = f[2]
+		}
+		if len(f) > 3 {
+			c.coauthors = f[3]
 		}
 		name := c.agent()
 		ai := name != ""
@@ -785,6 +830,42 @@ func parseHistory(data []byte) HistoryStats {
 			byName[name] = a
 		}
 		a.commits++
+
+		if recentTotal < recentWindow {
+			recentTotal++
+			if ai {
+				recentAI++
+			}
+		}
+
+		// A commit with an unparseable/empty author date still counts toward the
+		// ranking above, but contributes no time-series point.
+		t, err := time.Parse(time.RFC3339, dateStr)
+		if err != nil {
+			continue
+		}
+		if ai {
+			hasAI = true
+			if firstAI.IsZero() || t.Before(firstAI) {
+				firstAI = t
+			}
+		}
+		// Punch card reads in the commit's own (author-local) time; the daily
+		// timeline keys on the UTC calendar day so differing offsets can't split
+		// one day across two map buckets.
+		punch[int(t.Weekday())][t.Hour()]++
+		u := t.UTC()
+		day := time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
+		d := byDay[day]
+		if d == nil {
+			d = &DayCount{}
+			byDay[day] = d
+		}
+		if ai {
+			d.AI++
+		} else {
+			d.Human++
+		}
 	}
 
 	authors := make([]AuthorShare, 0, len(byName))
@@ -792,7 +873,46 @@ func parseHistory(data []byte) HistoryStats {
 		authors = append(authors, AuthorShare{Name: name, Commits: a.commits, AI: a.ai})
 	}
 	sortAuthorShares(authors)
-	return HistoryStats{Commits: commits, Authors: authors}
+
+	start, daily := buildDaily(byDay)
+	return HistoryStats{
+		Commits:     commits,
+		Authors:     authors,
+		Start:       start,
+		Daily:       daily,
+		Punch:       punch,
+		FirstAI:     firstAI,
+		HasAI:       hasAI,
+		RecentAI:    recentAI,
+		RecentTotal: recentTotal,
+	}
+}
+
+// buildDaily flattens the per-day commit map into a contiguous, chronological
+// series indexed by day-offset from the earliest day (gaps filled with zero
+// days), plus that start day. Returns a zero time and nil series when empty.
+func buildDaily(byDay map[time.Time]*DayCount) (time.Time, []DayCount) {
+	if len(byDay) == 0 {
+		return time.Time{}, nil
+	}
+	days := make([]time.Time, 0, len(byDay))
+	for d := range byDay {
+		days = append(days, d)
+	}
+	sort.Slice(days, func(i, j int) bool { return days[i].Before(days[j]) })
+	start, end := days[0], days[len(days)-1]
+	span := int(end.Sub(start).Hours()/24) + 1
+	if span < 1 {
+		span = 1
+	}
+	daily := make([]DayCount, span)
+	for d, c := range byDay {
+		idx := int(d.Sub(start).Hours() / 24)
+		if idx >= 0 && idx < span {
+			daily[idx] = *c
+		}
+	}
+	return start, daily
 }
 
 // Shortstat returns a one-line summary of the whole diff against base, e.g.

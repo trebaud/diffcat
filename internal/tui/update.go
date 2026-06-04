@@ -550,7 +550,7 @@ func (m *model) toggleFocus() {
 func (m *model) moveDown() {
 	switch {
 	case m.mode == viewOverview:
-		// read-only dashboard — nothing to move
+		m.scrollOverview(1)
 	case m.focus != focusFiles:
 		m.moveDiffCursor(1)
 	case m.mode == viewLog:
@@ -563,7 +563,7 @@ func (m *model) moveDown() {
 func (m *model) moveUp() {
 	switch {
 	case m.mode == viewOverview:
-		// read-only dashboard — nothing to move
+		m.scrollOverview(-1)
 	case m.focus != focusFiles:
 		m.moveDiffCursor(-1)
 	case m.mode == viewLog:
@@ -576,7 +576,7 @@ func (m *model) moveUp() {
 func (m *model) gotoTop() {
 	switch {
 	case m.mode == viewOverview:
-		// read-only dashboard — nothing to move
+		m.overviewScroll = 0
 	case m.focus != focusFiles:
 		m.diffCursor = 0
 		m.ensureCursorVisible()
@@ -595,7 +595,7 @@ func (m *model) gotoTop() {
 func (m *model) gotoBottom() {
 	switch {
 	case m.mode == viewOverview:
-		// read-only dashboard — nothing to move
+		m.overviewScroll = m.overviewMaxScroll()
 	case m.focus != focusFiles:
 		m.diffCursor = m.totalDiffRows() - 1
 		m.ensureCursorVisible()
@@ -615,6 +615,10 @@ func (m *model) gotoBottom() {
 // In the commit-history list it pages the commit selection (like j/k there);
 // everywhere else it scrolls the diff pane.
 func (m *model) pageFocused(delta int) {
+	if m.mode == viewOverview {
+		m.scrollOverview(delta)
+		return
+	}
 	if m.mode == viewLog && m.focus == focusFiles {
 		m.moveCommitCursor(delta)
 		return

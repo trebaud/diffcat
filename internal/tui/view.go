@@ -1191,7 +1191,7 @@ func (m model) footerView() string {
 	switch m.mode {
 	case viewOverview:
 		keys = []string{
-			"S/esc back", "t theme", "? help", "q quit",
+			"j/k scroll authors", "S/esc back", "t theme", "? help", "q quit",
 		}
 		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewLog:

@@ -1,14 +1,52 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/lipgloss/v2"
 
 	"github.com/trebaud/diffcat/internal/diff"
 	"github.com/trebaud/diffcat/internal/git"
 )
+
+// sampleHistory is a populated HistoryStats for the Stats dashboard: a per-author
+// ranking plus the time-series the AI-adoption curve, activity timeline, and
+// punch-card heatmap draw from — so the render invariants exercise those sections.
+func sampleHistory() git.HistoryStats {
+	daily := make([]git.DayCount, 200)
+	var punch [7][24]int
+	for i := range daily {
+		daily[i].Human = i%5 + 1
+		if i > 120 { // AI ramps up in the back half of the history
+			daily[i].AI = (i - 120) % 7
+		}
+		punch[i%7][i%24] += daily[i].Human + daily[i].AI
+	}
+	// Enough authors (with one very long name) that the ranking scrolls on a short
+	// terminal — exercising the scroll-offset window and the range heading.
+	authors := []git.AuthorShare{
+		{Name: "Claude", Commits: 82, AI: true},
+		{Name: "Ada Lovelace", Commits: 31},
+		{Name: "A Contributor With A Very Long Display Name", Commits: 18},
+	}
+	for i := 0; i < 20; i++ {
+		authors = append(authors, git.AuthorShare{Name: fmt.Sprintf("contributor-%d", i), Commits: 20 - i})
+	}
+	return git.HistoryStats{
+		Commits:     137,
+		Authors:     authors,
+		Start:       time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Daily:       daily,
+		Punch:       punch,
+		FirstAI:     time.Date(2026, 3, 12, 9, 0, 0, 0, time.UTC),
+		HasAI:       true,
+		RecentAI:    11,
+		RecentTotal: 30,
+	}
+}
 
 const sampleRaw = `diff --git a/view.go b/view.go
 index 1111111..2222222 100644
@@ -131,15 +169,9 @@ func TestRenderNoWrap(t *testing.T) {
 	overview.mode = viewOverview
 	overview.commits = logSampleModel().commits
 	overview.historyComputed = true
-	overview.historyStats = git.HistoryStats{
-		Commits: 137,
-		Authors: []git.AuthorShare{
-			{Name: "Claude", Commits: 82, AI: true},
-			{Name: "Ada Lovelace", Commits: 31},
-			{Name: "A Contributor With A Very Long Display Name", Commits: 18},
-			{Name: "Bob", Commits: 6},
-		},
-	}
+	overview.historyStats = sampleHistory()
+	overviewScrolled := overview
+	overviewScrolled.overviewScroll = 999 // clamps to the last page
 	overviewEmpty := overview
 	overviewEmpty.historyStats = git.HistoryStats{} // "no commits" state
 	// The Stats while their background computation is still in flight.
@@ -170,7 +202,7 @@ func TestRenderNoWrap(t *testing.T) {
 	openLog := logSampleModel()
 	openLog.logDiffOpen = true
 	openLog.focus = focusDiff
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewEmpty, overviewLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog} {
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -193,14 +225,7 @@ func TestFullScreenFill(t *testing.T) {
 	overview.mode = viewOverview
 	overview.commits = logSampleModel().commits
 	overview.historyComputed = true
-	overview.historyStats = git.HistoryStats{
-		Commits: 137,
-		Authors: []git.AuthorShare{
-			{Name: "Claude", Commits: 82, AI: true},
-			{Name: "Ada Lovelace", Commits: 31},
-			{Name: "Bob", Commits: 6},
-		},
-	}
+	overview.historyStats = sampleHistory()
 	overviewLoading := overview
 	overviewLoading.historyComputed = false
 	hiddenSidebar := sampleModel()

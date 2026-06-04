@@ -1,6 +1,9 @@
 package git
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // record builds one `git log` record in the separator-framed format Commits asks
 // for: fields joined by US (0x1f), terminated by RS (0x1e). The %D decoration
@@ -177,14 +180,11 @@ func TestStatusPaths(t *testing.T) {
 }
 
 // authorRec builds one commit record in the framing parseHistory expects: a
-// leading RS (0x1e), a header of author/email/co-authors joined by US (0x1f),
-// then the commit's --numstat lines (each "added\tdeleted\tpath").
-func authorRec(author, email, coauthors string, numstat ...string) string {
-	rec := "\x1e" + author + "\x1f" + email + "\x1f" + coauthors
-	for _, n := range numstat {
-		rec += "\n" + n
-	}
-	return rec
+// leading RS (0x1e), a header of date/author/email/co-authors joined by US
+// (0x1f). date is a strict ISO-8601 author date (RFC3339); pass "" to simulate a
+// commit with no parseable date.
+func authorRec(date, author, email, coauthors string) string {
+	return "\x1e" + date + "\x1f" + author + "\x1f" + email + "\x1f" + coauthors
 }
 
 func TestIsAIAuthored(t *testing.T) {
@@ -207,13 +207,12 @@ func TestIsAIAuthored(t *testing.T) {
 }
 
 func TestParseHistory(t *testing.T) {
-	// Four commits: Ada x2, Bob x1, and one Bob authored but Claude co-authored
-	// (which must classify to Claude, not Bob). Any numstat-looking lines are
-	// ignored — parseHistory reads only the header.
-	data := authorRec("Ada", "ada@x.io", "") + "\n" +
-		authorRec("Ada", "ada@x.io", "") + "\n" +
-		authorRec("Bob", "bob@x.io", "") + "\n" +
-		authorRec("Bob", "bob@x.io", "Claude <noreply@anthropic.com>")
+	// Four commits, newest-first (the order git log emits): Bob+Claude co-author
+	// (classifies to Claude, not Bob), Bob, Ada, Ada.
+	data := authorRec("2026-01-04T10:00:00Z", "Bob", "bob@x.io", "Claude <noreply@anthropic.com>") + "\n" +
+		authorRec("2026-01-03T09:00:00Z", "Bob", "bob@x.io", "") + "\n" +
+		authorRec("2026-01-02T08:00:00Z", "Ada", "ada@x.io", "") + "\n" +
+		authorRec("2026-01-01T07:00:00Z", "Ada", "ada@x.io", "")
 	got := parseHistory([]byte(data))
 
 	if got.Commits != 4 {
@@ -234,6 +233,68 @@ func TestParseHistory(t *testing.T) {
 		if got.Authors[i] != w {
 			t.Errorf("Authors[%d] = %+v, want %+v", i, got.Authors[i], w)
 		}
+	}
+}
+
+func TestParseHistoryTimeSeries(t *testing.T) {
+	// Same four commits as TestParseHistory: one AI (Claude) on Jan 4, humans on
+	// Jan 1–3, spanning four contiguous days.
+	data := authorRec("2026-01-04T10:00:00Z", "Bob", "bob@x.io", "Claude <noreply@anthropic.com>") + "\n" +
+		authorRec("2026-01-03T09:00:00Z", "Bob", "bob@x.io", "") + "\n" +
+		authorRec("2026-01-02T08:00:00Z", "Ada", "ada@x.io", "") + "\n" +
+		authorRec("2026-01-01T07:00:00Z", "Ada", "ada@x.io", "")
+	got := parseHistory([]byte(data))
+
+	if want := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC); !got.Start.Equal(want) {
+		t.Errorf("Start = %v, want %v", got.Start, want)
+	}
+	wantDaily := []DayCount{{Human: 1}, {Human: 1}, {Human: 1}, {AI: 1}}
+	if len(got.Daily) != len(wantDaily) {
+		t.Fatalf("Daily len = %d (%v), want %d", len(got.Daily), got.Daily, len(wantDaily))
+	}
+	for i, w := range wantDaily {
+		if got.Daily[i] != w {
+			t.Errorf("Daily[%d] = %+v, want %+v", i, got.Daily[i], w)
+		}
+	}
+
+	// Punch must total every dated commit, placed at the commit's local hour.
+	punchTotal := 0
+	for _, row := range got.Punch {
+		for _, n := range row {
+			punchTotal += n
+		}
+	}
+	if punchTotal != 4 {
+		t.Errorf("punch total = %d, want 4", punchTotal)
+	}
+	// Jan 1 2026 is a Thursday; the 07:00Z human commit lands there.
+	if got.Punch[int(time.Thursday)][7] != 1 {
+		t.Errorf("Punch[Thu][7] = %d, want 1", got.Punch[int(time.Thursday)][7])
+	}
+
+	if !got.HasAI {
+		t.Error("HasAI = false, want true")
+	}
+	if want := time.Date(2026, 1, 4, 10, 0, 0, 0, time.UTC); !got.FirstAI.Equal(want) {
+		t.Errorf("FirstAI = %v, want %v", got.FirstAI, want)
+	}
+	if got.RecentTotal != 4 || got.RecentAI != 1 {
+		t.Errorf("recent = %d/%d, want 1/4", got.RecentAI, got.RecentTotal)
+	}
+}
+
+// A commit whose date doesn't parse still counts in the ranking but adds no
+// time-series point — the series must stay consistent.
+func TestParseHistoryUndatedCommit(t *testing.T) {
+	data := authorRec("", "Ada", "ada@x.io", "") + "\n" +
+		authorRec("2026-01-01T07:00:00Z", "Ada", "ada@x.io", "")
+	got := parseHistory([]byte(data))
+	if got.Commits != 2 {
+		t.Errorf("Commits = %d, want 2", got.Commits)
+	}
+	if len(got.Daily) != 1 || got.Daily[0].Human != 1 {
+		t.Errorf("Daily = %v, want one day with 1 human commit", got.Daily)
 	}
 }
 

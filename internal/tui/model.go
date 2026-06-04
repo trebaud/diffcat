@@ -219,6 +219,11 @@ type model struct {
 	historyComputing bool
 	historyHead      string
 
+	// overviewScroll is the author-ranking scroll offset on the Stats dashboard:
+	// the index of the first visible author row. j/k and the page keys move it
+	// (the charts on the right don't scroll); it's clamped to the row count.
+	overviewScroll int
+
 	err error
 }
 
