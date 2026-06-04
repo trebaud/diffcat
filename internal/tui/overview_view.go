@@ -38,18 +38,25 @@ func (m model) overviewTwoPane() bool {
 // back into the grid so a short pane isn't left with a stub of charts.
 const minGridChartRows = 5
 
+// overviewChartMargin is the blank gap between the contribution calendar and the
+// chart grid below it, so the two read as distinct bands and the pane breathes.
+const overviewChartMargin = 2
+
 // overviewCharts builds the right pane: the contribution calendar spanning the
-// full pane width on top, then the remaining charts packed into the smaller grid
-// below it. When the pane is too short to spare the calendar's rows plus a usable
-// grid (or there's no dated activity), the calendar rides in the grid like any
-// other chart instead. Returns exactly height lines.
+// full pane width on top (with taller cellH=2 rows for presence), a breathing
+// margin, then the remaining charts packed into the smaller grid below it. When
+// the pane is too short to spare the calendar's rows plus a usable grid (or
+// there's no dated activity), the calendar rides in the grid like any other chart
+// instead. Returns exactly height lines.
 func (m model) overviewCharts(hs git.HistoryStats, width, height int) []string {
-	contrib := contributionBlock(hs, width, 1)
-	if contrib == nil || height < len(contrib)+1+minGridChartRows {
+	contrib := contributionBlock(hs, width, 1, 2)
+	if contrib == nil || height < len(contrib)+overviewChartMargin+minGridChartRows {
 		return m.chartGrid(hs, width, height, true)
 	}
 	out := append([]string{}, contrib...)
-	out = append(out, "") // blank between the calendar and the charts below
+	for i := 0; i < overviewChartMargin; i++ {
+		out = append(out, "") // breathing room between the calendar and the charts
+	}
 	return append(out, m.chartGrid(hs, width, height-len(out), false)...)
 }
 
@@ -272,11 +279,12 @@ func padRight(s string, n int) string {
 	return truncateText(s, n)
 }
 
-// adoptionBlock is the AI-adoption curve: two one-row sparklines (human in green,
-// AI in accent) sharing one vertical scale so the AI line visibly rises from
-// nothing as the human line towers, plus a headline with the first AI commit date
-// and the AI share of the most recent commits. Returns nil if too narrow.
-func adoptionBlock(hs git.HistoryStats, width int) []string {
+// adoptionBlock is the AI-adoption curve: two area charts (human in green, AI in
+// accent) sharing one vertical scale so the AI band visibly rises from nothing as
+// the human band towers, plus a headline with the first AI commit date and the AI
+// share of the most recent commits. Each band is rows lines tall (rows=1 is the
+// original one-line sparkline). Returns nil if too narrow.
+func adoptionBlock(hs git.HistoryStats, width, rows int) []string {
 	const label = 7
 	cols := width - 2 - label
 	if cols < 8 {
@@ -295,18 +303,33 @@ func adoptionBlock(hs git.HistoryStats, width int) []string {
 	}
 	headline := fmt.Sprintf("  first AI commit %s · %d%% of last %d",
 		hs.FirstAI.Format("2006-01-02"), sharePct(hs.RecentAI, hs.RecentTotal), hs.RecentTotal)
-	return []string{
-		headingStyle.Render("  AI adoption"),
-		"  " + padRight("human", label) + addedStyle.Render(sparklineMax(human, scale)),
-		"  " + padRight("ai", label) + titleStyle.Render(sparklineMax(ai, scale)),
-		mutedStyle.Render(headline),
-	}
+	out := []string{headingStyle.Render("  AI adoption")}
+	out = append(out, labeledArea("human", human, scale, rows, label, addedStyle)...)
+	out = append(out, labeledArea("ai", ai, scale, rows, label, titleStyle)...)
+	return append(out, mutedStyle.Render(headline))
 }
 
-// timelineBlock is the commit-activity timeline: one self-scaled sparkline of all
-// commits per time bucket across the repo's life, plus a totals summary. Returns
-// nil if too narrow.
-func timelineBlock(hs git.HistoryStats, width int) []string {
+// labeledArea renders one named series as a rows-tall area chart styled by st, the
+// name left-padded to label columns on the first line and blank on the rest, each
+// line indented two spaces to match the other charts.
+func labeledArea(name string, values []int, scale, rows, label int, st lipgloss.Style) []string {
+	area := sparkArea(values, scale, rows)
+	out := make([]string, len(area))
+	for i, line := range area {
+		lbl := strings.Repeat(" ", label)
+		if i == 0 {
+			lbl = padRight(name, label)
+		}
+		out[i] = "  " + lbl + st.Render(line)
+	}
+	return out
+}
+
+// timelineBlock is the commit-activity timeline: a self-scaled area chart of all
+// commits per time bucket across the repo's life, plus a totals summary. The chart
+// is rows lines tall (rows=1 is the original one-line sparkline). Returns nil if
+// too narrow.
+func timelineBlock(hs git.HistoryStats, width, rows int) []string {
 	cols := width - 2
 	if cols < 8 {
 		return nil
@@ -320,11 +343,11 @@ func timelineBlock(hs git.HistoryStats, width int) []string {
 		vals[i] = d.Human + d.AI
 	}
 	span := spanLabel(len(hs.Daily))
-	return []string{
-		headingStyle.Render("  Commit activity"),
-		"  " + addedStyle.Render(sparklineMax(vals, maxInts(vals))),
-		mutedStyle.Render(fmt.Sprintf("  %d commits · %s", hs.Commits, span)),
+	out := []string{headingStyle.Render("  Commit activity")}
+	for _, line := range sparkArea(vals, maxInts(vals), rows) {
+		out = append(out, "  "+addedStyle.Render(line))
 	}
+	return append(out, mutedStyle.Render(fmt.Sprintf("  %d commits · %s", hs.Commits, span)))
 }
 
 // heatmapBlock is the punch-card heatmap: an hour ruler plus seven Mon–Sun rows of
@@ -402,14 +425,18 @@ func heatCellWidth(v, peak, w int) string {
 // contributionBlock is the GitHub-style contribution calendar: weeks as columns,
 // seven weekday rows (Sun–Sat), each cell shaded by that day's commit count via
 // heatCellWidth, scaled to the busiest day in view. Each cell is cellW columns
-// wide (the full-width hero uses 2 for chunky squares; the grid fallback uses 1).
-// Columns align to the week of the first commit (Start.Weekday()); only the
-// trailing weeks that fit width are shown. A month-abbreviation ruler labels where
-// each month begins. Returns nil if too narrow or there's no dated activity.
-func contributionBlock(hs git.HistoryStats, width, cellW int) []string {
+// wide and drawn cellH rows tall (the full-width version uses cellH=2 to give the
+// calendar more vertical presence; the grid fallback uses 1×1). Columns align to
+// the week of the first commit (Start.Weekday()); only the trailing weeks that fit
+// width are shown. A month-abbreviation ruler labels where each month begins.
+// Returns nil if too narrow or there's no dated activity.
+func contributionBlock(hs git.HistoryStats, width, cellW, cellH int) []string {
 	const prefix = 6 // "  Sun " — 2 indent + 3 label + 1 space
 	if cellW < 1 {
 		cellW = 1
+	}
+	if cellH < 1 {
+		cellH = 1
 	}
 	avail := (width - prefix) / cellW
 	if avail < 6 || len(hs.Daily) == 0 {
@@ -480,24 +507,32 @@ func contributionBlock(hs git.HistoryStats, width, cellW int) []string {
 	}
 	labels := []string{"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"}
 	for wd := 0; wd < 7; wd++ {
-		var b strings.Builder
-		b.WriteString("  " + mutedStyle.Render(labels[wd]) + " ")
+		var cells strings.Builder
 		for col := 0; col < avail; col++ {
 			if present[wd][col] == 0 {
-				b.WriteString(strings.Repeat(" ", cellW))
+				cells.WriteString(strings.Repeat(" ", cellW))
 				continue
 			}
-			b.WriteString(heatCellWidth(grid[wd][col], peak, cellW))
+			cells.WriteString(heatCellWidth(grid[wd][col], peak, cellW))
 		}
-		out = append(out, b.String())
+		// A cellH-tall band per weekday: the label sits on the first line, the rest
+		// repeat the cells so each day reads as a taller block.
+		for r := 0; r < cellH; r++ {
+			label := strings.Repeat(" ", 3)
+			if r == 0 {
+				label = mutedStyle.Render(labels[wd])
+			}
+			out = append(out, "  "+label+" "+cells.String())
+		}
 	}
 	return out
 }
 
-// timeOfDayBlock is the time-of-day rhythm: a 24-hour sparkline of commits summed
+// timeOfDayBlock is the time-of-day rhythm: a 24-hour area chart of commits summed
 // across every weekday, an hour ruler, and a caption naming the peak hour and the
-// share of commits landing after midnight. Returns nil if too narrow or empty.
-func timeOfDayBlock(hs git.HistoryStats, width int) []string {
+// share of commits landing after midnight. The chart is rows lines tall (rows=1 is
+// the original one-line sparkline). Returns nil if too narrow or empty.
+func timeOfDayBlock(hs git.HistoryStats, width, rows int) []string {
 	if width-2 < 24 {
 		return nil
 	}
@@ -526,12 +561,12 @@ func timeOfDayBlock(hs git.HistoryStats, width int) []string {
 			}
 		}
 	}
-	return []string{
-		headingStyle.Render("  Time of day"),
-		"  " + addedStyle.Render(sparklineMax(hours[:], peak)),
-		strings.Repeat(" ", 2) + mutedStyle.Render(string(ruler)),
-		mutedStyle.Render(fmt.Sprintf("  peak %dh · %d%% after midnight", peakHr, sharePct(night, total))),
+	out := []string{headingStyle.Render("  Time of day")}
+	for _, line := range sparkArea(hours[:], peak, rows) {
+		out = append(out, "  "+addedStyle.Render(line))
 	}
+	out = append(out, strings.Repeat(" ", 2)+mutedStyle.Render(string(ruler)))
+	return append(out, mutedStyle.Render(fmt.Sprintf("  peak %dh · %d%% after midnight", peakHr, sharePct(night, total))))
 }
 
 // weekdayBlock is the per-weekday rollup: seven horizontal bars (Mon–Sun) of
@@ -698,6 +733,49 @@ func sparklineMax(values []int, max int) string {
 		b.WriteRune(blocks[lvl])
 	}
 	return b.String()
+}
+
+// sparkArea renders values as a filled area chart rows lines tall, scaled to max:
+// each value's bar fills from the bottom row up with full blocks and a fractional
+// top block, so the series reads as a solid silhouette that grows with rows. With
+// rows=1 it collapses to the same one-line sparkline as sparklineMax. The returned
+// slice is rows lines, each len(values) columns wide (top line first).
+func sparkArea(values []int, max, rows int) []string {
+	if rows < 1 {
+		rows = 1
+	}
+	levels := []rune(" ▁▂▃▄▅▆▇█") // 0..8 eighths of a cell
+	grid := make([][]rune, rows)
+	for r := range grid {
+		grid[r] = make([]rune, 0, len(values))
+	}
+	for _, v := range values {
+		eighths := 0
+		if max > 0 && v > 0 {
+			eighths = v * (rows * 8) / max
+			if eighths < 1 {
+				eighths = 1 // any activity shows at least a sliver
+			}
+			if eighths > rows*8 {
+				eighths = rows * 8
+			}
+		}
+		for r := 0; r < rows; r++ {
+			cell := eighths - (rows-1-r)*8 // rows below this one are already full
+			if cell < 0 {
+				cell = 0
+			}
+			if cell > 8 {
+				cell = 8
+			}
+			grid[r] = append(grid[r], levels[cell])
+		}
+	}
+	out := make([]string, rows)
+	for r := 0; r < rows; r++ {
+		out[r] = string(grid[r])
+	}
+	return out
 }
 
 // spanLabel describes a history of days days in the largest sensible unit: days
