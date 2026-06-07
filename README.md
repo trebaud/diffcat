@@ -4,7 +4,8 @@
 
 **`cat`, but for git diffs.**
 
-[![Go](https://img.shields.io/badge/go-1.21%2B-00ADD8?logo=go)](https://go.dev)
+[![CI](https://github.com/trebaud/diffcat/actions/workflows/ci.yml/badge.svg)](https://github.com/trebaud/diffcat/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/go-1.25%2B-00ADD8?logo=go)](https://go.dev)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 [![Release](https://img.shields.io/github/v/release/trebaud/diffcat)](https://github.com/trebaud/diffcat/releases)
 
@@ -30,11 +31,22 @@
 
 ## Install
 
+**Prebuilt binary** (no Go required) — download the tarball for your platform from the
+[latest release](https://github.com/trebaud/diffcat/releases/latest)
+(`darwin-amd64`, `darwin-arm64`, `linux-amd64`, `linux-arm64`), then:
+
+```bash
+tar -xzf diffcat-*-darwin-arm64.tar.gz   # match the file you downloaded
+sudo mv diffcat /usr/local/bin/
+```
+
+**With Go** (1.25+):
+
 ```bash
 go install github.com/trebaud/diffcat/cmd/diffcat@latest
 ```
 
-From source:
+**From source:**
 
 ```bash
 git clone https://github.com/trebaud/diffcat.git && cd diffcat && ./scripts/install.sh

@@ -15,7 +15,7 @@ RESET='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BIN_NAME="diffcat"
-GO_MIN_VERSION="1.21"
+GO_MIN_VERSION="1.25"
 
 info()  { printf "${CYAN}[*]${RESET} %s\n" "$*"; }
 ok()    { printf "${GREEN}[+]${RESET} %s\n" "$*"; }

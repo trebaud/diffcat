@@ -35,7 +35,8 @@ for PLATFORM in "${PLATFORMS[@]}"; do
         -o "${STAGE}/${APP_NAME}" \
         ./cmd/diffcat
 
-    tar -czf "${BUILD_DIR}/${BASE}.tar.gz" -C "$BUILD_DIR" "$BASE"
+    # Archive the binary at the root of the tarball so it extracts to ./diffcat
+    tar -czf "${BUILD_DIR}/${BASE}.tar.gz" -C "$STAGE" "$APP_NAME"
     rm -rf "$STAGE"
 done
 
