@@ -51,7 +51,7 @@ It ships as a single static binary with no runtime dependencies.
 
 ## Demo
 
-![commit history and stats](assets/history.gif)
+![commit details modal and the whole-repo stats dashboard](assets/commit-details-stats.gif)
 
 ![fuzzy find and in-diff search](assets/find.gif)
 
