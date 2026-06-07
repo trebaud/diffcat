@@ -11,7 +11,7 @@ A terminal diff viewer that also tells you how much of your code was written by 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 [![Release](https://img.shields.io/github/v/release/trebaud/diffcat)](https://github.com/trebaud/diffcat/releases)
 
-![whole-repo stats dashboard](assets/stats.gif)
+![diffcat browsing a branch diff](assets/browse.gif)
 
 </div>
 
@@ -50,8 +50,6 @@ It ships as a single static binary with no runtime dependencies.
 - Stats dashboard (`S`): contribution calendar, per-author ranking, activity charts, streaks, and a human-vs-AI split that names each agent
 
 ## Demo
-
-![diffcat browsing a branch diff](assets/browse.gif)
 
 ![commit history and stats](assets/history.gif)
 
