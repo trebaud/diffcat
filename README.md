@@ -8,10 +8,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 [![Release](https://img.shields.io/github/v/release/trebaud/diffcat)](https://github.com/trebaud/diffcat/releases)
 
-<!-- TODO: record a demo. Drop a ~10s asciinema/GIF showing: launch → browse tree →
-     toggle split (s) → open commit history (L). Save to docs/demo.gif and uncomment:
-![diffcat demo](docs/demo.gif)
--->
+![diffcat browsing a branch diff](assets/browse.gif)
 
 </div>
 
@@ -22,6 +19,14 @@
 - Unified or side-by-side view (`s`), light/dark theme (`t`)
 - Diffs against main/master or a specified merge base by default
 - Commit history view
+
+## Demo
+
+![commit history and stats](assets/history.gif)
+
+![fuzzy find and in-diff search](assets/find.gif)
+
+![whole-repo stats dashboard](assets/stats.gif)
 
 ## Install
 
