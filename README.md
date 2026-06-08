@@ -18,14 +18,8 @@
 There are good diff tools already: [delta](https://github.com/dandavison/delta),
 [difftastic](https://github.com/Wilfred/difftastic),
 [lazygit](https://github.com/jesseduffield/lazygit), [tig](https://github.com/jonas/tig).
-diffcat is narrower on purpose. 
+diffcat is narrower on purpose. It focuses on making the diff view experience delighful. 
 
-The stats dashboard is the part the others don't have: a contribution calendar,
-per-author ranking, hour-of-day and weekday activity, streaks, and a human-vs-AI commit
-split. As more code gets written by agents, "how much of this did a human write?" is
-worth being able to answer, and diffcat answers it from your git history, per agent.
-
-It ships as a single static binary with no runtime dependencies.
 
 ## Features
 
