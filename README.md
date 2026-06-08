@@ -18,8 +18,7 @@
 There are good diff tools already: [delta](https://github.com/dandavison/delta),
 [difftastic](https://github.com/Wilfred/difftastic),
 [lazygit](https://github.com/jesseduffield/lazygit), [tig](https://github.com/jonas/tig).
-diffcat is narrower on purpose.
-, its main focus is on making the git diff view experience delighful. 
+diffcat is narrower on purpose, its main focus is on making the git diff view experience delighful. 
 
 
 ## Features
