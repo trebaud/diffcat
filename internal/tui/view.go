@@ -43,9 +43,17 @@ func (m model) render() string {
 		return m.tooSmallView()
 	}
 
-	// The overview dashboard is a single full-width pane, not the two-pane split.
+	// The overview dashboard and a contributor's detail page are single full-width
+	// panes, not the two-pane split.
 	if m.mode == viewOverview {
 		screen := m.overviewView()
+		if m.showHelp {
+			return m.floatOverlay(screen, m.helpBox())
+		}
+		return screen
+	}
+	if m.mode == viewAuthorDetail {
+		screen := m.authorDetailView()
 		if m.showHelp {
 			return m.floatOverlay(screen, m.helpBox())
 		}
@@ -185,6 +193,10 @@ func (m model) headerView() string {
 			stat = "  " + headingStyle.Render(fmt.Sprintf("%d commits", m.historyStats.Commits))
 		}
 		return left + mid + stat
+	}
+	if m.mode == viewAuthorDetail {
+		mid := mutedStyle.Render(fmt.Sprintf("  %s · stats", branchLabel(m.branch)))
+		return left + mid + "  " + headingStyle.Render(m.detailAuthor)
 	}
 	if m.mode == viewCommit {
 		if m.scopeWorking {
@@ -1191,7 +1203,12 @@ func (m model) footerView() string {
 	switch m.mode {
 	case viewOverview:
 		keys = []string{
-			"j/k scroll authors", "S/esc back", "t theme", "? help", "q quit",
+			"j/k select author", "↵ open contributor", "S/esc back", "t theme", "? help", "q quit",
+		}
+		return mutedStyle.Render(strings.Join(keys, "  ·  "))
+	case viewAuthorDetail:
+		keys = []string{
+			"esc back", "S/L history", "t theme", "? help", "q quit",
 		}
 		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewLog:

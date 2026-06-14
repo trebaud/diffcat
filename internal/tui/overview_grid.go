@@ -260,7 +260,8 @@ func overviewBlocks(withContribution bool) [][]chartSpec {
 		perRow: 1,
 	}
 	groups := [][]chartSpec{
-		{adoption, humanAI}, // AI story — kept together in one column
+		{fixed(moduleBlock)}, // contributor page: top modules (nil → self-skips on the repo dashboard)
+		{adoption, humanAI},  // AI story — kept together in one column
 		{timeline},
 		{timeOfDay},
 		{fixed(weekdayBlock)},

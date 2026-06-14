@@ -35,16 +35,65 @@ func sampleHistory() git.HistoryStats {
 	for i := 0; i < 20; i++ {
 		authors = append(authors, git.AuthorShare{Name: fmt.Sprintf("contributor-%d", i), Commits: 20 - i})
 	}
+	// Per-author sub-stats for the contributor detail page: their own (shorter) daily
+	// series, a punch card, and a module ranking. Claude (AI) and Ada (human) exercise
+	// both badges; the long-named contributor exercises the card/heatmap truncation.
+	authorDaily := make([]git.DayCount, 60)
+	var authorPunch [7][24]int
+	for i := range authorDaily {
+		authorDaily[i].Human = i%4 + 1
+		authorPunch[i%7][(i*3)%24] += authorDaily[i].Human
+	}
+	mkAuthor := func(commits int, ai bool, mods []git.ModuleCount) git.HistoryStats {
+		d := authorDaily
+		if ai {
+			d = make([]git.DayCount, len(authorDaily))
+			for i := range d {
+				d[i].AI = authorDaily[i].Human
+			}
+		}
+		return git.HistoryStats{
+			Commits: commits,
+			Start:   time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
+			End:     time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC),
+			Daily:   d,
+			Punch:   authorPunch,
+			Modules: mods,
+		}
+	}
+	byAuthor := map[string]git.HistoryStats{
+		"Claude": mkAuthor(82, true, []git.ModuleCount{
+			{Path: "internal/tui", Lines: 4200},
+			{Path: "internal/git", Lines: 1800},
+			{Path: "cmd/diffcat", Lines: 300},
+			{Path: "(root)", Lines: 90},
+		}),
+		"Ada Lovelace": mkAuthor(31, false, []git.ModuleCount{
+			{Path: "internal/git", Lines: 900},
+			{Path: "a/very/long/module/path/that/truncates", Lines: 120},
+		}),
+		"A Contributor With A Very Long Display Name": mkAuthor(18, false, nil),
+	}
+	// A few commit SHAs per author back the lazy module computation (ensureAuthorModules
+	// only kicks the load when the author has SHAs).
+	authorSHAs := map[string][]string{
+		"Claude":       {"aaa111", "bbb222", "ccc333"},
+		"Ada Lovelace": {"ddd444", "eee555"},
+		"A Contributor With A Very Long Display Name": {"fff666"},
+	}
 	return git.HistoryStats{
 		Commits:     137,
 		Authors:     authors,
 		Start:       time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		End:         time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
 		Daily:       daily,
 		Punch:       punch,
 		FirstAI:     time.Date(2026, 3, 12, 9, 0, 0, 0, time.UTC),
 		HasAI:       true,
 		RecentAI:    11,
 		RecentTotal: 30,
+		ByAuthor:    byAuthor,
+		AuthorSHAs:  authorSHAs,
 	}
 }
 
@@ -133,6 +182,22 @@ func commitSampleModel() model {
 	return m
 }
 
+// detailSampleModel is sampleModel switched into a contributor's Stats detail page
+// (viewAuthorDetail) for the named author, which must be present in sampleHistory's
+// ByAuthor map. The lazy module cache is seeded as if the background compute already
+// landed, so the "Top modules" heatmap renders.
+func detailSampleModel(name string) model {
+	m := sampleModel()
+	m.mode = viewAuthorDetail
+	m.commits = logSampleModel().commits
+	m.historyComputed = true
+	m.historyStats = sampleHistory()
+	m.detailAuthor = name
+	m.authorModules = map[string][]git.ModuleCount{name: m.historyStats.ByAuthor[name].Modules}
+	m.authorModulesComputing = map[string]bool{}
+	return m
+}
+
 // TestRenderNoWrap guards the invariant that no rendered line is wider than the
 // terminal — a line that overflows wraps and shoves the whole layout down.
 func TestRenderNoWrap(t *testing.T) {
@@ -177,6 +242,16 @@ func TestRenderNoWrap(t *testing.T) {
 	// The Stats while their background computation is still in flight.
 	overviewLoading := overview
 	overviewLoading.historyComputed = false
+	// Contributor detail pages: an AI agent (module heatmap + AI-tinted charts), a
+	// human, and one with no module data (the "Top modules" block must self-skip).
+	detailAI := detailSampleModel("Claude")
+	detailHuman := detailSampleModel("Ada Lovelace")
+	detailNoMods := detailSampleModel("A Contributor With A Very Long Display Name")
+	// The detail page before the lazy module load lands: cache empty, so the heatmap
+	// is absent and the "analyzing…" note shows in the card.
+	detailLoading := detailSampleModel("Claude")
+	detailLoading.authorModules = map[string][]git.ModuleCount{}
+	detailLoading.authorModulesComputing = map[string]bool{"Claude": true}
 	// A committed diff search, the active search prompt, and the fuzzy file picker.
 	searched := sampleModel()
 	searched.focus = focusDiff
@@ -202,7 +277,7 @@ func TestRenderNoWrap(t *testing.T) {
 	openLog := logSampleModel()
 	openLog.logDiffOpen = true
 	openLog.focus = focusDiff
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog} {
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, detailAI, detailHuman, detailNoMods, detailLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -228,6 +303,8 @@ func TestFullScreenFill(t *testing.T) {
 	overview.historyStats = sampleHistory()
 	overviewLoading := overview
 	overviewLoading.historyComputed = false
+	detailAI := detailSampleModel("Claude")
+	detailHuman := detailSampleModel("Ada Lovelace")
 	hiddenSidebar := sampleModel()
 	hiddenSidebar.sidebar = sidebarHidden
 	wideLog := logSampleModel()
@@ -235,7 +312,7 @@ func TestFullScreenFill(t *testing.T) {
 	wideLog.commits[0].Tags = []string{"v1.2.0"}
 	openLog := logSampleModel()
 	openLog.logDiffOpen = true
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, commitSampleModel(), overview, overviewLoading, hiddenSidebar, wideLog} {
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, commitSampleModel(), overview, overviewLoading, detailAI, detailHuman, hiddenSidebar, wideLog} {
 		m.focus = focusDiff
 		for _, split := range []bool{false, true} {
 			m.splitView = split
@@ -372,6 +449,57 @@ func TestCommitDrillInRestore(t *testing.T) {
 	}
 	if len(m.rows) != len(wantRows) {
 		t.Errorf("branch rows not restored: got %d, want %d", len(m.rows), len(wantRows))
+	}
+}
+
+// TestAuthorDetailNavigation checks that selecting a contributor in the Stats
+// ranking opens their detail page, that the cursor scrolls the ranking, and that
+// backing out returns to the overview.
+func TestAuthorDetailNavigation(t *testing.T) {
+	m := sampleModel()
+	m.mode = viewOverview
+	m.historyComputed = true
+	m.historyStats = sampleHistory()
+	m.authorModules = map[string][]git.ModuleCount{}
+	m.authorModulesComputing = map[string]bool{}
+	m.width, m.height = 120, 40
+
+	// j moves the ranking cursor; enter opens the author under it.
+	m.moveDown()
+	if m.overviewCursor != 1 {
+		t.Fatalf("after moveDown, overviewCursor = %d, want 1", m.overviewCursor)
+	}
+	wantName := m.historyStats.Authors[1].Name
+	cmd := m.enterAuthorDetail()
+	if m.mode != viewAuthorDetail {
+		t.Fatalf("enterAuthorDetail should switch to viewAuthorDetail, got %d", m.mode)
+	}
+	if m.detailAuthor != wantName {
+		t.Errorf("detailAuthor = %q, want %q", m.detailAuthor, wantName)
+	}
+	// The author has SHAs in sampleHistory, so the lazy module load is kicked.
+	if cmd == nil {
+		t.Error("enterAuthorDetail should return a command to load the contributor's modules")
+	}
+	if !m.authorModulesComputing[wantName] {
+		t.Error("enterAuthorDetail should mark the contributor's modules as computing")
+	}
+
+	m.exitAuthorDetail()
+	if m.mode != viewOverview {
+		t.Errorf("exitAuthorDetail should return to viewOverview, got %d", m.mode)
+	}
+	// The ranking cursor (and its selection) is preserved across the round trip.
+	if m.overviewCursor != 1 {
+		t.Errorf("overviewCursor = %d after returning, want 1 (preserved)", m.overviewCursor)
+	}
+
+	// enterAuthorDetail is a no-op before the background stats land.
+	notReady := sampleModel()
+	notReady.mode = viewOverview
+	notReady.enterAuthorDetail()
+	if notReady.mode == viewAuthorDetail {
+		t.Error("enterAuthorDetail should be a no-op when stats haven't been computed")
 	}
 }
 

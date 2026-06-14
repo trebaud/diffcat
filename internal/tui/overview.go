@@ -20,6 +20,7 @@ import (
 func (m *model) enterOverview() tea.Cmd {
 	m.mode = viewOverview
 	m.focus = focusFiles
+	m.overviewCursor = 0
 	m.overviewScroll = 0
 	return m.ensureHistory()
 }
@@ -30,4 +31,35 @@ func (m *model) exitOverview() {
 	m.mode = viewLog
 	m.focus = focusFiles
 	m.loadCommitDiff()
+}
+
+// enterAuthorDetail opens the per-contributor Stats page for the author under the
+// ranking cursor. The page's summary card and activity charts reuse that author's
+// sub-stats (historyStats.ByAuthor), already computed by the cheap background walk;
+// the one heavier piece — their module ranking — is kicked off lazily here (the
+// returned command), so the page itself opens instantly. A no-op (nil) when the
+// stats haven't landed yet or the cursor doesn't map to a known author.
+func (m *model) enterAuthorDetail() tea.Cmd {
+	if !m.historyComputed {
+		return nil
+	}
+	authors := m.historyStats.Authors
+	if m.overviewCursor < 0 || m.overviewCursor >= len(authors) {
+		return nil
+	}
+	name := authors[m.overviewCursor].Name
+	if _, ok := m.historyStats.ByAuthor[name]; !ok {
+		return nil
+	}
+	m.detailAuthor = name
+	m.mode = viewAuthorDetail
+	m.focus = focusFiles
+	return m.ensureAuthorModules(name)
+}
+
+// exitAuthorDetail backs out of a contributor's detail page to the ranking it was
+// opened from, leaving the cursor and scroll where they were.
+func (m *model) exitAuthorDetail() {
+	m.mode = viewOverview
+	m.focus = focusFiles
 }

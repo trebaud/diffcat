@@ -27,10 +27,11 @@ const (
 type viewMode int
 
 const (
-	viewBranch   viewMode = iota // file tree (left) + selected file's diff (right)
-	viewLog                      // commit list (left) + selected commit's diff (right)
-	viewCommit                   // one commit's file tree (left) + its per-file diff (right)
-	viewOverview                 // full-screen branch summary (churn bars + languages)
+	viewBranch       viewMode = iota // file tree (left) + selected file's diff (right)
+	viewLog                          // commit list (left) + selected commit's diff (right)
+	viewCommit                       // one commit's file tree (left) + its per-file diff (right)
+	viewOverview                     // full-screen whole-repo Stats dashboard
+	viewAuthorDetail                 // full-screen single-contributor Stats page (opened from viewOverview)
 )
 
 // sidebarSize controls how wide the left pane is, cycled with `[` / `]`.
@@ -219,10 +220,24 @@ type model struct {
 	historyComputing bool
 	historyHead      string
 
-	// overviewScroll is the author-ranking scroll offset on the Stats dashboard:
-	// the index of the first visible author row. j/k and the page keys move it
-	// (the charts on the right don't scroll); it's clamped to the row count.
+	// overviewCursor is the selected author row on the Stats dashboard (an index into
+	// historyStats.Authors); j/k and the page keys move it and enter opens that
+	// contributor's detail page. overviewScroll is the ranking's scroll offset (the
+	// index of the first visible row), reconciled to keep the cursor in view (the
+	// charts on the right don't scroll). detailAuthor is the contributor whose
+	// detail page (viewAuthorDetail) is open, keyed into historyStats.ByAuthor.
+	overviewCursor int
 	overviewScroll int
+	detailAuthor   string
+
+	// authorModules caches each contributor's "Top modules" ranking, computed lazily
+	// the first time their detail page opens (git.AuthorModules diffs only that
+	// author's commits, off the dashboard's fast open path). A present key — even a
+	// nil/empty ranking — means "done, don't recompute"; authorModulesComputing guards
+	// the in-flight git call. Both are dropped when committed history moves (refresh),
+	// since the per-author SHA sets change with it.
+	authorModules          map[string][]git.ModuleCount
+	authorModulesComputing map[string]bool
 
 	err error
 }
@@ -245,6 +260,9 @@ func newModel(repo, base, baseName string, baseIsDefault bool, branch string, fi
 		fileSig:         fileSignatures(files),
 		unseen:          map[string]bool{},
 		unseenAt:        map[string]int{},
+
+		authorModules:          map[string][]git.ModuleCount{},
+		authorModulesComputing: map[string]bool{},
 	}
 	m.rebuildTree()
 	m.loadDiff()

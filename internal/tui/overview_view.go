@@ -78,9 +78,29 @@ func (m model) overviewMaxScroll() int {
 	return max(0, len(m.historyStats.Authors)-m.overviewAuthorViewport())
 }
 
-// scrollOverview moves the author-ranking offset by delta, clamped to range.
-func (m *model) scrollOverview(delta int) {
-	m.overviewScroll += delta
+// moveOverviewCursor moves the author-ranking selection by delta, clamped to the
+// author count, then scrolls the window just enough to keep it visible.
+func (m *model) moveOverviewCursor(delta int) {
+	m.overviewCursor += delta
+	if hi := len(m.historyStats.Authors) - 1; m.overviewCursor > hi {
+		m.overviewCursor = hi
+	}
+	if m.overviewCursor < 0 {
+		m.overviewCursor = 0
+	}
+	m.ensureAuthorVisible()
+}
+
+// ensureAuthorVisible scrolls the ranking window just enough to keep the selected
+// author row inside the viewport, then clamps the offset to range.
+func (m *model) ensureAuthorVisible() {
+	viewport := m.overviewAuthorViewport()
+	if m.overviewCursor < m.overviewScroll {
+		m.overviewScroll = m.overviewCursor
+	}
+	if bottom := m.overviewScroll + viewport - 1; m.overviewCursor > bottom {
+		m.overviewScroll = m.overviewCursor - viewport + 1
+	}
 	if hi := m.overviewMaxScroll(); m.overviewScroll > hi {
 		m.overviewScroll = hi
 	}
@@ -178,7 +198,162 @@ func (m model) authorList(hs git.HistoryStats, total, height int) []string {
 	}
 	out := []string{headingStyle.Render(heading)}
 	for i := start; i < end; i++ {
-		out = append(out, authorRow(authors[i], total))
+		out = append(out, authorRow(authors[i], total, i == m.overviewCursor))
+	}
+	return out
+}
+
+// authorCardWidth is the left summary-card column on a contributor's detail page —
+// narrower than the dashboard's author pane, since the card is a few short lines and
+// the charts deserve the rest of the width.
+const authorCardWidth = 34
+
+// authorDetailView composes the full screen for a single contributor's Stats page:
+// the shared header, the body padded to fill the height, and the shared footer. Like
+// the dashboard it emits exactly m.height lines, each m.width wide.
+func (m model) authorDetailView() string {
+	header := padLine(m.headerView(), m.width)
+	footer := padLine(m.footerView(), m.width)
+	bodyHeight := m.height - 2
+	if bodyHeight < 1 {
+		bodyHeight = 1
+	}
+	lines := []string{header}
+	lines = append(lines, m.authorDetailBody(m.width, bodyHeight)...)
+	lines = append(lines, footer)
+	return strings.Join(lines, "\n")
+}
+
+// authorDetailBody builds exactly height body lines: a title row, a blank, then a
+// two-pane region — the contributor summary card on the left and their activity
+// charts (the same renderers the dashboard uses, scoped to this author) on the
+// right, divided by a vertical rule. On a narrow screen the card takes the full
+// width and the charts are dropped, mirroring overviewBody.
+func (m model) authorDetailBody(width, height int) []string {
+	hs, ok := m.historyStats.ByAuthor[m.detailAuthor]
+	// The module ranking is loaded lazily and cached separately; splice it into the
+	// per-author stats so the shared chart grid renders the heatmap once it lands
+	// (nil until then, so moduleBlock self-skips and the grid uses the room).
+	hs.Modules = m.authorModules[m.detailAuthor]
+	out := []string{
+		padLine(m.authorDetailTitle(), width),
+		padLine("", width),
+	}
+	paneHeight := max(1, height-len(out))
+	if !ok {
+		out = append(out, padLine(mutedStyle.Render("  no data for this contributor"), width))
+		return fitHeight(out, width, height)
+	}
+
+	card := m.authorSummaryCard(hs)
+	if width < authorCardWidth+1+overviewMinChartWidth {
+		// Narrow: the card takes the whole width; the charts need more room than the
+		// remainder can spare, so they're dropped (matching overviewBody).
+		for _, l := range card {
+			out = append(out, padLine(l, width))
+		}
+		return fitHeight(out, width, height)
+	}
+
+	rightW := width - authorCardWidth - 1
+	right := m.overviewCharts(hs, rightW, paneHeight)
+	div := borderStyle.Render("│")
+	for i := 0; i < paneHeight; i++ {
+		var l, r string
+		if i < len(card) {
+			l = card[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		out = append(out, padLine(padLine(l, authorCardWidth)+div+padLine(r, rightW), width))
+	}
+	return fitHeight(out, width, height)
+}
+
+// detailShare looks up the open contributor's ranking bucket and zero-based rank in
+// the author ranking; ok is false if the name isn't found (shouldn't happen, since
+// ByAuthor keys come from the ranking).
+func (m model) detailShare() (share git.AuthorShare, rank int, ok bool) {
+	for i, a := range m.historyStats.Authors {
+		if a.Name == m.detailAuthor {
+			return a, i, true
+		}
+	}
+	return git.AuthorShare{}, -1, false
+}
+
+// authorDetailTitle labels the page: the contributor's name, a human/AI badge, and
+// their rank, commit count, and share of the repo.
+func (m model) authorDetailTitle() string {
+	share, rank, ok := m.detailShare()
+	badge := mutedStyle.Render("human")
+	if ok && share.AI {
+		badge = titleStyle.Render("AI agent")
+	}
+	head := "  " + titleStyle.Render(m.detailAuthor) + "  " + badge
+	if ok {
+		total := authorTotal(m.historyStats.Authors)
+		head += "   " + mutedStyle.Render(fmt.Sprintf("· #%d of %d · %d commits · %d%% of repo",
+			rank+1, len(m.historyStats.Authors), share.Commits, sharePct(share.Commits, total)))
+	}
+	return head
+}
+
+// authorSummaryCard is the left pane of the detail page: the contributor's headline
+// stats — rank, commit count and share, active span and active-day count, longest
+// and current streak, busiest day, and weekly cadence — all from their sub-stats.
+func (m model) authorSummaryCard(hs git.HistoryStats) []string {
+	share, rank, _ := m.detailShare()
+	total := authorTotal(m.historyStats.Authors)
+
+	out := []string{headingStyle.Render("  Contributor")}
+	out = append(out, "  "+mutedStyle.Render(fmt.Sprintf("rank #%d of %d", rank+1, len(m.historyStats.Authors))))
+
+	word := "commits"
+	if share.Commits == 1 {
+		word = "commit"
+	}
+	out = append(out, "  "+addedStyle.Render(fmt.Sprintf("%d %s", share.Commits, word))+
+		mutedStyle.Render(fmt.Sprintf(" · %d%% of repo", sharePct(share.Commits, total))))
+
+	if !hs.Start.IsZero() {
+		out = append(out, "  "+mutedStyle.Render(fmt.Sprintf("active %s → %s",
+			hs.Start.Format("Jan 2006"), hs.End.Format("Jan 2006"))))
+	}
+
+	active := 0
+	for _, d := range hs.Daily {
+		if d.Human+d.AI > 0 {
+			active++
+		}
+	}
+	if active > 0 {
+		dayWord := "days"
+		if active == 1 {
+			dayWord = "day"
+		}
+		out = append(out, "  "+mutedStyle.Render(fmt.Sprintf("%d active %s", active, dayWord)))
+	}
+
+	longest, current := hs.Streaks()
+	streakWord := "days"
+	if longest == 1 {
+		streakWord = "day"
+	}
+	out = append(out, "  "+addedStyle.Render(fmt.Sprintf("longest %d %s", longest, streakWord))+
+		mutedStyle.Render(fmt.Sprintf(" · now %d", current)))
+
+	if day, busiest := hs.BusiestDay(); busiest > 0 {
+		out = append(out, "  "+mutedStyle.Render(fmt.Sprintf("busiest %s · %d commits", day.Format("Jan 2"), busiest)))
+	}
+
+	out = append(out, "  "+mutedStyle.Render(fmt.Sprintf("~%.0f commits / week", hs.CommitsPerWeek())))
+
+	// The module heatmap loads lazily (it diffs this author's commits); show a note
+	// until it lands, after which the key is present and the heatmap rides the grid.
+	if _, done := m.authorModules[m.detailAuthor]; !done {
+		out = append(out, "  "+mutedStyle.Render("top modules · analyzing…"))
 	}
 	return out
 }
@@ -247,8 +422,10 @@ func authorTotal(shares []git.AuthorShare) int {
 
 // authorRow renders one ranked author line: a padded name, a fixed-width bar of
 // their share of all commits (accent-colored for an AI agent, green for a human),
-// the rounded percentage, and the commit count.
-func authorRow(s git.AuthorShare, total int) string {
+// the rounded percentage, and the commit count. The selected row (the ranking
+// cursor) gets a ▸ caret and its name in the selection blue so it reads as the
+// open-on-enter target without relying on color alone.
+func authorRow(s git.AuthorShare, total int, selected bool) string {
 	const barW = 12
 	pct, filled := sharePct(s.Commits, total), 0
 	if total > 0 {
@@ -266,7 +443,13 @@ func authorRow(s git.AuthorShare, total int) string {
 	if s.Commits == 1 {
 		word = "commit"
 	}
-	return "  " + padRight(truncateText(s.Name, 18), 18) + " " + bar +
+	lead := "  "
+	name := padRight(truncateText(s.Name, 18), 18)
+	if selected {
+		lead = selectedStyle.Render("▸ ")
+		name = selectedStyle.Render(name)
+	}
+	return lead + name + " " + bar +
 		mutedStyle.Render(fmt.Sprintf(" %3d%%  %d %s", pct, s.Commits, word))
 }
 
@@ -689,6 +872,44 @@ func concentrationBlock(hs git.HistoryStats, width int) []string {
 		"  " + bar + mutedStyle.Render(fmt.Sprintf(" %d%%", topPct)),
 		mutedStyle.Render(fmt.Sprintf("  %d %s = half of commits", busFactor, word)),
 	}
+}
+
+// moduleBlock is the per-contributor "Top modules" heatmap: the codebase areas the
+// author changed most, ranked by lines changed (added+deleted), each a label and a
+// green bar scaled to the busiest module plus its line count. Only the top few rows
+// are shown. Returns nil when there's no module data — including the whole-repo
+// stats, which leave Modules nil, so the block self-skips on the main dashboard.
+func moduleBlock(hs git.HistoryStats, width int) []string {
+	if len(hs.Modules) == 0 {
+		return nil
+	}
+	peak := hs.Modules[0].Lines // Modules is sorted desc, so the first is the busiest
+	if peak <= 0 {
+		return nil
+	}
+	const maxRows, label = 6, 14
+	barW := width - 3 - label - len(fmt.Sprintf(" %d", peak))
+	if barW < 6 {
+		return nil
+	}
+	if barW > 24 {
+		barW = 24
+	}
+	out := []string{headingStyle.Render("  Top modules")}
+	for i := 0; i < min(maxRows, len(hs.Modules)); i++ {
+		mod := hs.Modules[i]
+		filled := mod.Lines * barW / peak
+		if mod.Lines > 0 && filled == 0 {
+			filled = 1
+		}
+		if filled > barW {
+			filled = barW
+		}
+		bar := addedStyle.Render(strings.Repeat("█", filled)) + borderStyle.Render(strings.Repeat("░", barW-filled))
+		out = append(out, "  "+mutedStyle.Render(padRight(truncateText(mod.Path, label), label))+" "+
+			bar+mutedStyle.Render(fmt.Sprintf(" %d", mod.Lines)))
+	}
+	return out
 }
 
 // rebucket aggregates a daily commit series into at most cols evenly-spaced

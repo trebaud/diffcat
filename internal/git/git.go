@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -687,12 +688,13 @@ func (c authorCommit) agent() string {
 // or co-author fields.
 func (c authorCommit) isAIAuthored() bool { return c.agent() != "" }
 
-// authorshipFormat frames one line per commit: the author date (strict ISO-8601),
-// author, email, and the (possibly multiple, %x1f-joined) Co-authored-by values.
-// Leading %x1e (RS) marks each commit so records split unambiguously regardless of
-// trailing newlines. The date is its own %x1f field, so the spaces inside it don't
-// disturb the field split.
-const authorshipFormat = "--pretty=format:%x1e%aI%x1f%an%x1f%ae%x1f%(trailers:key=Co-authored-by,valueonly,separator=%x1f)"
+// authorshipFormat frames one line per commit: the commit SHA, the author date
+// (strict ISO-8601), author, email, and the (possibly multiple, %x1f-joined)
+// Co-authored-by values. Leading %x1e (RS) marks each commit so records split
+// unambiguously regardless of trailing newlines. The date is its own %x1f field, so
+// the spaces inside it don't disturb the field split; the SHA leads (the trailers
+// blob, which may itself contain %x1f, must stay the last field).
+const authorshipFormat = "--pretty=format:%x1e%H%x1f%aI%x1f%an%x1f%ae%x1f%(trailers:key=Co-authored-by,valueonly,separator=%x1f)"
 
 // AuthorShare is one bucket of the commit count: either a named AI coding agent
 // (e.g. "Claude", detected via aiAgentMarkers) or an individual human author (by
@@ -722,6 +724,43 @@ type DayCount struct {
 	AI    int
 }
 
+// ModuleCount is one codebase area (a path prefix; see moduleKey) and the number of
+// lines an author changed across it (added+deleted), summed over their commits — the
+// unit behind the per-contributor "Top modules" heatmap.
+type ModuleCount struct {
+	Path  string
+	Lines int
+}
+
+// sortModuleCounts orders module buckets by lines changed descending, ties by path —
+// the order the per-author module heatmap ranks them in.
+func sortModuleCounts(mods []ModuleCount) {
+	sort.Slice(mods, func(i, j int) bool {
+		if mods[i].Lines != mods[j].Lines {
+			return mods[i].Lines > mods[j].Lines
+		}
+		return mods[i].Path < mods[j].Path
+	})
+}
+
+// moduleKey groups a changed file path into a codebase "area" for the per-author
+// module ranking: the first two path segments (e.g. "internal/tui", "cmd/diffcat"),
+// or the single segment when that's all there is, or "(root)" for a top-level file.
+func moduleKey(path string) string {
+	if path == "" {
+		return "(root)"
+	}
+	parts := strings.Split(path, "/")
+	switch len(parts) {
+	case 1:
+		return "(root)"
+	case 2:
+		return parts[0]
+	default:
+		return parts[0] + "/" + parts[1]
+	}
+}
+
 // HistoryStats summarizes everything reachable from a revision: the non-merge
 // commit count, a per-author ranking by commit count (each human author and each
 // AI agent its own bucket), and time-series the Stats dashboard visualizes. It
@@ -732,14 +771,19 @@ type DayCount struct {
 // even on a deep history, where `--numstat`/`--shortstat` (which diff every
 // commit) would be the bottleneck. The time-series below are derived from the
 // author date that the same single walk already formats, so they cost nothing
-// extra; render re-buckets the daily resolution down to the screen width.
+// extra; render re-buckets the daily resolution down to the screen width. The
+// per-contributor module ranking is the one thing that needs per-file line
+// counts, so it's computed lazily and scoped to one author's commits by
+// AuthorModules — never on this whole-repo open path.
 type HistoryStats struct {
 	Commits int
 	Authors []AuthorShare
 
-	// Start is the day of the earliest dated commit (zero if none parsed); Daily
-	// is the per-day human/AI commit split indexed by day-offset from Start.
+	// Start/End are the days of the earliest and latest dated commits (zero if none
+	// parsed); Daily is the per-day human/AI commit split indexed by day-offset from
+	// Start.
 	Start time.Time
+	End   time.Time
 	Daily []DayCount
 
 	// Punch is the commit count by author-local weekday (0=Sun..6=Sat) × hour
@@ -752,16 +796,38 @@ type HistoryStats struct {
 	HasAI       bool
 	RecentAI    int
 	RecentTotal int
+
+	// Modules ranks the codebase areas by lines changed (added+deleted), descending.
+	// The whole-repo walk leaves it nil everywhere — it's filled in lazily, per
+	// contributor, by AuthorModules (which diffs only that author's commits) so the
+	// expensive numstat work stays off this open path. The contributor "Top modules"
+	// heatmap reads it after the lazy load lands; an empty ranking self-skips.
+	Modules []ModuleCount
+
+	// ByAuthor maps each ranking bucket's Name (see Authors) to that author's own
+	// sub-stats: their Commits, Start/End, Daily series, and Punch card.
+	// Authors/HasAI are left zero on these entries so the AI-adoption, human-vs-AI,
+	// and concentration charts self-skip when a single contributor's page reuses the
+	// dashboard renderers. Computed from the same single walk, so it costs no extra
+	// git calls. Nil on the per-author entries themselves (no recursion).
+	ByAuthor map[string]HistoryStats
+
+	// AuthorSHAs lists each author's non-merge commit SHAs (keyed by the same Name as
+	// Authors/ByAuthor), captured cheaply by the walk. AuthorModules pipes one
+	// author's set to git to compute their module ranking on demand — correct even
+	// for AI-agent buckets, which a `git log --author` filter could never match.
+	AuthorSHAs map[string][]string
 }
 
 // recentWindow is how many of the newest commits the AI-share headline summarizes.
 const recentWindow = 30
 
 // History gathers HistoryStats for everything reachable from rev (e.g. "HEAD")
-// from a single `git log` that only formats author/co-author fields — no diff, so
-// it stays fast on large histories. Merges are excluded (a merge isn't authored
-// work to rank). Still run off the UI thread, since even a bare walk of a very
-// deep history isn't instant. Returns a zero HistoryStats on error.
+// from a single `git log` that only formats author/co-author fields (plus the
+// commit SHA, for AuthorModules) — no diff, so it stays fast on large histories.
+// Merges are excluded (a merge isn't authored work to rank). Still run off the UI
+// thread, since even a bare walk of a very deep history isn't instant. Returns a
+// zero HistoryStats on error.
 func History(repo, rev string) HistoryStats {
 	out, err := exec.Command("git", "-C", repo, "log", "--no-color", "--no-merges", authorshipFormat, rev).Output()
 	if err != nil {
@@ -770,15 +836,24 @@ func History(repo, rev string) HistoryStats {
 	return parseHistory(out)
 }
 
-// parseHistory aggregates `git log` output (framed by authorshipFormat) into
-// HistoryStats: the non-merge commit count and a per-author commit ranking. Each
-// commit is classified once — to the AI agent that signed it (author or
-// Co-authored-by trailer), else to its human author by name — and increments that
-// bucket. Pure, so it's testable without a repository.
+// parseHistory aggregates `git log --numstat` output (framed by authorshipFormat)
+// into HistoryStats: the non-merge commit count, a per-author commit ranking, the
+// repo-wide time-series, and per-author sub-stats (time-series + module line
+// ranking). Each commit is classified once — to the AI agent that signed it
+// (author or Co-authored-by trailer), else to its human author by name — and
+// increments both the repo-wide and that author's accumulators. The numstat lines
+// trailing each record give the per-file line counts behind the module ranking.
+// Pure, so it's testable without a repository.
 func parseHistory(data []byte) HistoryStats {
+	// Each author accumulates their own copy of the time-series plus the list of
+	// their commit SHAs, so the per-contributor page reuses the dashboard renderers
+	// and AuthorModules can scope a numstat pass to just that author's commits.
 	type acc struct {
 		commits int
 		ai      bool
+		byDay   map[time.Time]*DayCount
+		punch   [7][24]int
+		shas    []string
 	}
 	byName := map[string]*acc{}
 	commits := 0
@@ -798,24 +873,29 @@ func parseHistory(data []byte) HistoryStats {
 			continue
 		}
 		commits++
+		// The record is a single formatted line (no diff body): sha, date, author,
+		// email, co-authors.
 		header := rec
 		if i := strings.IndexByte(rec, '\n'); i >= 0 {
 			header = rec[:i]
 		}
-		f := strings.SplitN(header, "\x1f", 4)
+		f := strings.SplitN(header, "\x1f", 5)
 		var c authorCommit
-		var dateStr string
+		var sha, dateStr string
 		if len(f) > 0 {
-			dateStr = f[0]
+			sha = f[0]
 		}
 		if len(f) > 1 {
-			c.author = f[1]
+			dateStr = f[1]
 		}
 		if len(f) > 2 {
-			c.email = f[2]
+			c.author = f[2]
 		}
 		if len(f) > 3 {
-			c.coauthors = f[3]
+			c.email = f[3]
+		}
+		if len(f) > 4 {
+			c.coauthors = f[4]
 		}
 		name := c.agent()
 		ai := name != ""
@@ -826,10 +906,13 @@ func parseHistory(data []byte) HistoryStats {
 		}
 		a := byName[name]
 		if a == nil {
-			a = &acc{ai: ai}
+			a = &acc{ai: ai, byDay: map[time.Time]*DayCount{}}
 			byName[name] = a
 		}
 		a.commits++
+		if sha != "" {
+			a.shas = append(a.shas, sha)
+		}
 
 		if recentTotal < recentWindow {
 			recentTotal++
@@ -852,67 +935,150 @@ func parseHistory(data []byte) HistoryStats {
 		}
 		// Punch card reads in the commit's own (author-local) time; the daily
 		// timeline keys on the UTC calendar day so differing offsets can't split
-		// one day across two map buckets.
+		// one day across two map buckets. Each point lands in both the repo-wide and
+		// the author's own series.
 		punch[int(t.Weekday())][t.Hour()]++
+		a.punch[int(t.Weekday())][t.Hour()]++
 		u := t.UTC()
 		day := time.Date(u.Year(), u.Month(), u.Day(), 0, 0, 0, 0, time.UTC)
-		d := byDay[day]
-		if d == nil {
-			d = &DayCount{}
-			byDay[day] = d
+		bump := func(m map[time.Time]*DayCount) {
+			d := m[day]
+			if d == nil {
+				d = &DayCount{}
+				m[day] = d
+			}
+			if ai {
+				d.AI++
+			} else {
+				d.Human++
+			}
 		}
-		if ai {
-			d.AI++
-		} else {
-			d.Human++
-		}
+		bump(byDay)
+		bump(a.byDay)
 	}
 
 	authors := make([]AuthorShare, 0, len(byName))
+	byAuthor := make(map[string]HistoryStats, len(byName))
+	authorSHAs := make(map[string][]string, len(byName))
 	for name, a := range byName {
 		authors = append(authors, AuthorShare{Name: name, Commits: a.commits, AI: a.ai})
+		aStart, aEnd, aDaily := buildDaily(a.byDay)
+		byAuthor[name] = HistoryStats{
+			Commits: a.commits,
+			Start:   aStart,
+			End:     aEnd,
+			Daily:   aDaily,
+			Punch:   a.punch,
+		}
+		authorSHAs[name] = a.shas
 	}
 	sortAuthorShares(authors)
 
-	start, daily := buildDaily(byDay)
+	start, end, daily := buildDaily(byDay)
 	return HistoryStats{
 		Commits:     commits,
 		Authors:     authors,
 		Start:       start,
+		End:         end,
 		Daily:       daily,
 		Punch:       punch,
 		FirstAI:     firstAI,
 		HasAI:       hasAI,
 		RecentAI:    recentAI,
 		RecentTotal: recentTotal,
+		ByAuthor:    byAuthor,
+		AuthorSHAs:  authorSHAs,
 	}
+}
+
+// parseNumstat reads one numstat count field: a decimal line count, or "-" (git's
+// marker for a binary file) which yields 0. Any unparseable value is treated as 0.
+func parseNumstat(s string) int {
+	if s == "-" || s == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// AuthorModules computes one contributor's "Top modules" ranking — codebase areas by
+// lines changed (added+deleted), descending — by diffing only their commits. The
+// SHAs (from HistoryStats.AuthorSHAs) are fed on stdin, so an arbitrarily prolific
+// author can't overflow the argument list, and the set is exactly what the cheap
+// walk classified to that bucket (correct even for AI agents). This is the expensive,
+// numstat-diffing work kept off the dashboard's whole-repo open path: it runs lazily,
+// once per contributor opened. Returns nil for an empty set or on error.
+func AuthorModules(repo string, shas []string) []ModuleCount {
+	if len(shas) == 0 {
+		return nil
+	}
+	// --no-walk treats each fed SHA individually (no ancestry traversal); the empty
+	// pretty-format leaves only the numstat rows in the output.
+	cmd := exec.Command("git", "-C", repo, "log", "--no-color", "--no-walk", "--stdin", "--numstat", "--pretty=format:")
+	cmd.Stdin = strings.NewReader(strings.Join(shas, "\n"))
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	return parseAuthorModules(out)
+}
+
+// parseAuthorModules aggregates `git log --numstat` output into a module ranking by
+// lines changed. It reads every "added\tdeleted\tpath" row (the only non-blank lines
+// the empty pretty-format leaves), summing added+deleted into the file's module
+// bucket; binary files (numstat "-\t-") and pure renames (0\t0) contribute 0 and so
+// don't rank. Pure, so it's testable without a repository.
+func parseAuthorModules(data []byte) []ModuleCount {
+	byModule := map[string]int{}
+	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" {
+			continue
+		}
+		ns := strings.SplitN(line, "\t", 3)
+		if len(ns) < 3 {
+			continue
+		}
+		byModule[moduleKey(ns[2])] += parseNumstat(ns[0]) + parseNumstat(ns[1])
+	}
+	mods := make([]ModuleCount, 0, len(byModule))
+	for p, n := range byModule {
+		if n > 0 {
+			mods = append(mods, ModuleCount{Path: p, Lines: n})
+		}
+	}
+	sortModuleCounts(mods)
+	return mods
 }
 
 // buildDaily flattens the per-day commit map into a contiguous, chronological
 // series indexed by day-offset from the earliest day (gaps filled with zero
-// days), plus that start day. Returns a zero time and nil series when empty.
-func buildDaily(byDay map[time.Time]*DayCount) (time.Time, []DayCount) {
+// days), plus that start and end day. Returns zero times and a nil series when
+// empty.
+func buildDaily(byDay map[time.Time]*DayCount) (start, end time.Time, daily []DayCount) {
 	if len(byDay) == 0 {
-		return time.Time{}, nil
+		return time.Time{}, time.Time{}, nil
 	}
 	days := make([]time.Time, 0, len(byDay))
 	for d := range byDay {
 		days = append(days, d)
 	}
 	sort.Slice(days, func(i, j int) bool { return days[i].Before(days[j]) })
-	start, end := days[0], days[len(days)-1]
+	start, end = days[0], days[len(days)-1]
 	span := int(end.Sub(start).Hours()/24) + 1
 	if span < 1 {
 		span = 1
 	}
-	daily := make([]DayCount, span)
+	daily = make([]DayCount, span)
 	for d, c := range byDay {
 		idx := int(d.Sub(start).Hours() / 24)
 		if idx >= 0 && idx < span {
 			daily[idx] = *c
 		}
 	}
-	return start, daily
+	return start, end, daily
 }
 
 // HourOfDay collapses the punch card into per-hour commit counts summed across

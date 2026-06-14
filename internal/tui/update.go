@@ -67,6 +67,43 @@ func (m *model) ensureHistory() tea.Cmd {
 	return historyCmd(m.repo)
 }
 
+// authorModulesMsg carries one contributor's lazily-computed module ranking back to
+// the UI thread; author keys it into the cache.
+type authorModulesMsg struct {
+	author  string
+	modules []git.ModuleCount
+}
+
+// authorModulesCmd computes a contributor's module ranking in the background by
+// diffing only their commits (git.AuthorModules), so the heavy numstat work never
+// touches the dashboard's whole-repo open path.
+func authorModulesCmd(repo, author string, shas []string) tea.Cmd {
+	return func() tea.Msg {
+		return authorModulesMsg{author: author, modules: git.AuthorModules(repo, shas)}
+	}
+}
+
+// ensureAuthorModules kicks the lazy module computation for one contributor the first
+// time their page opens, returning the command (nil when already cached, in flight,
+// or there's nothing to diff). The result arrives as an authorModulesMsg.
+func (m *model) ensureAuthorModules(name string) tea.Cmd {
+	if name == "" {
+		return nil
+	}
+	if _, done := m.authorModules[name]; done {
+		return nil
+	}
+	if m.authorModulesComputing[name] {
+		return nil
+	}
+	shas := m.historyStats.AuthorSHAs[name]
+	if len(shas) == 0 {
+		return nil
+	}
+	m.authorModulesComputing[name] = true
+	return authorModulesCmd(m.repo, name, shas)
+}
+
 // Update is the Elm update function — it maps a message to the next model and
 // any side effects.
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -125,6 +162,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.historyComputing = false
 		return m, nil
 
+	case authorModulesMsg:
+		// Cache the lazily-computed ranking regardless of the current view (the reader
+		// may have navigated away). A present key — even an empty ranking — marks it
+		// done so it isn't recomputed.
+		if m.authorModules == nil {
+			m.authorModules = map[string][]git.ModuleCount{}
+		}
+		m.authorModules[msg.author] = msg.modules
+		delete(m.authorModulesComputing, msg.author)
+		return m, nil
+
 	case gitStateMsg:
 		// Only do the (more expensive) refresh when the cheap fingerprint moved;
 		// otherwise the poll is a no-op beyond re-arming itself.
@@ -134,9 +182,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		sync := syncCmd(m.repo, m.baseName)
 		// If the commit that moved invalidated the whole-history stats and the Stats
-		// dashboard is on screen, recompute them live; otherwise leave it for the
-		// next open. (refresh only invalidates when HEAD actually moved.)
-		if m.mode == viewOverview {
+		// dashboard (or a contributor's detail page) is on screen, recompute them
+		// live; otherwise leave it for the next open. (refresh only invalidates when
+		// HEAD actually moved.)
+		if m.mode == viewOverview || m.mode == viewAuthorDetail {
 			return m, tea.Batch(sync, m.ensureHistory())
 		}
 		return m, sync
@@ -269,6 +318,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.exitCommit()
 		case viewBranch:
 			m.enterLog()
+		case viewAuthorDetail:
+			m.exitAuthorDetail()
 		case viewOverview:
 			m.exitOverview()
 		case viewLog:
@@ -280,7 +331,11 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "L":
 		// Return to the commit-history view (the default). From a per-commit tree,
-		// step back to the history list rather than reloading from scratch.
+		// step back to the history list rather than reloading from scratch. A
+		// contributor's detail page normalizes through the ranking it sits above.
+		if m.mode == viewAuthorDetail {
+			m.exitAuthorDetail()
+		}
 		switch m.mode {
 		case viewLog:
 			// already in history
@@ -308,6 +363,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// is inert — matching the hidden footer/help hint — and the reader stays put.
 		if m.onBaseBranch() {
 			return m, nil
+		}
+		// A contributor's detail page normalizes through the ranking it sits above.
+		if m.mode == viewAuthorDetail {
+			m.exitAuthorDetail()
 		}
 		switch m.mode {
 		case viewBranch:
@@ -348,7 +407,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "r":
 		m.refresh()
 		m.syncFingerprint = git.Fingerprint(m.repo, m.baseName)
-		if m.mode == viewOverview {
+		if m.mode == viewOverview || m.mode == viewAuthorDetail {
 			return m, m.ensureHistory()
 		}
 		return m, nil
@@ -357,6 +416,11 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Toggle the whole-repo Stats dashboard. It belongs to the commit-history
 		// view (a repo-wide summary), so it's only reachable from there — not from a
 		// commit drill-in or the branch diff. `S` (or esc) backs out to the history.
+		// From a contributor's detail page, drop to the ranking first so `S` toggles
+		// the whole dashboard off in one press.
+		if m.mode == viewAuthorDetail {
+			m.exitAuthorDetail()
+		}
 		switch m.mode {
 		case viewOverview:
 			m.exitOverview()
@@ -451,8 +515,12 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.focus = focusDiff
 		return m, nil
 	case "enter", "o":
-		// The Stats dashboard is read-only — nothing to open.
+		// Stats dashboard: open the selected contributor's detail page (kicking the
+		// lazy module computation). The detail page itself has nothing further to open.
 		if m.mode == viewOverview {
+			return m, m.enterAuthorDetail()
+		}
+		if m.mode == viewAuthorDetail {
 			return m, nil
 		}
 		// History list: enter drills into the highlighted commit's file tree, or
@@ -550,7 +618,7 @@ func (m *model) toggleFocus() {
 func (m *model) moveDown() {
 	switch {
 	case m.mode == viewOverview:
-		m.scrollOverview(1)
+		m.moveOverviewCursor(1)
 	case m.focus != focusFiles:
 		m.moveDiffCursor(1)
 	case m.mode == viewLog:
@@ -563,7 +631,7 @@ func (m *model) moveDown() {
 func (m *model) moveUp() {
 	switch {
 	case m.mode == viewOverview:
-		m.scrollOverview(-1)
+		m.moveOverviewCursor(-1)
 	case m.focus != focusFiles:
 		m.moveDiffCursor(-1)
 	case m.mode == viewLog:
@@ -576,7 +644,8 @@ func (m *model) moveUp() {
 func (m *model) gotoTop() {
 	switch {
 	case m.mode == viewOverview:
-		m.overviewScroll = 0
+		m.overviewCursor = 0
+		m.ensureAuthorVisible()
 	case m.focus != focusFiles:
 		m.diffCursor = 0
 		m.ensureCursorVisible()
@@ -595,7 +664,8 @@ func (m *model) gotoTop() {
 func (m *model) gotoBottom() {
 	switch {
 	case m.mode == viewOverview:
-		m.overviewScroll = m.overviewMaxScroll()
+		m.overviewCursor = max(0, len(m.historyStats.Authors)-1)
+		m.ensureAuthorVisible()
 	case m.focus != focusFiles:
 		m.diffCursor = m.totalDiffRows() - 1
 		m.ensureCursorVisible()
@@ -616,7 +686,7 @@ func (m *model) gotoBottom() {
 // everywhere else it scrolls the diff pane.
 func (m *model) pageFocused(delta int) {
 	if m.mode == viewOverview {
-		m.scrollOverview(delta)
+		m.moveOverviewCursor(delta)
 		return
 	}
 	if m.mode == viewLog && m.focus == focusFiles {
@@ -700,14 +770,18 @@ func (m *model) refresh() {
 		m.historyHead = head
 		m.historyComputed = false
 		m.historyComputing = false
+		// The per-author SHA sets (and so their module rankings) move with history;
+		// drop the lazy cache so a reopened contributor recomputes against the new HEAD.
+		m.authorModules = map[string][]git.ModuleCount{}
+		m.authorModulesComputing = map[string]bool{}
 	}
 
-	if m.mode == viewOverview {
-		// The full-screen Stats dashboard covers whatever it was opened from — and
-		// that origin may have stashed its own tree (a per-commit drill-in repurposes
-		// m.files). Leave all that origin state untouched so backing out restores it
-		// intact; it re-syncs on the next poll once the dashboard closes. Only the
-		// Stats themselves were refreshed (above).
+	if m.mode == viewOverview || m.mode == viewAuthorDetail {
+		// The full-screen Stats dashboard (and a contributor's detail page) cover
+		// whatever they were opened from — and that origin may have stashed its own
+		// tree (a per-commit drill-in repurposes m.files). Leave all that origin state
+		// untouched so backing out restores it intact; it re-syncs on the next poll
+		// once the dashboard closes. Only the Stats themselves were refreshed (above).
 		return
 	}
 

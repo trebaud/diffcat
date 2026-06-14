@@ -180,11 +180,11 @@ func TestStatusPaths(t *testing.T) {
 }
 
 // authorRec builds one commit record in the framing parseHistory expects: a
-// leading RS (0x1e), a header of date/author/email/co-authors joined by US
+// leading RS (0x1e), a header of sha/date/author/email/co-authors joined by US
 // (0x1f). date is a strict ISO-8601 author date (RFC3339); pass "" to simulate a
 // commit with no parseable date.
-func authorRec(date, author, email, coauthors string) string {
-	return "\x1e" + date + "\x1f" + author + "\x1f" + email + "\x1f" + coauthors
+func authorRec(sha, date, author, email, coauthors string) string {
+	return "\x1e" + sha + "\x1f" + date + "\x1f" + author + "\x1f" + email + "\x1f" + coauthors
 }
 
 func TestIsAIAuthored(t *testing.T) {
@@ -209,10 +209,10 @@ func TestIsAIAuthored(t *testing.T) {
 func TestParseHistory(t *testing.T) {
 	// Four commits, newest-first (the order git log emits): Bob+Claude co-author
 	// (classifies to Claude, not Bob), Bob, Ada, Ada.
-	data := authorRec("2026-01-04T10:00:00Z", "Bob", "bob@x.io", "Claude <noreply@anthropic.com>") + "\n" +
-		authorRec("2026-01-03T09:00:00Z", "Bob", "bob@x.io", "") + "\n" +
-		authorRec("2026-01-02T08:00:00Z", "Ada", "ada@x.io", "") + "\n" +
-		authorRec("2026-01-01T07:00:00Z", "Ada", "ada@x.io", "")
+	data := authorRec("sha4", "2026-01-04T10:00:00Z", "Bob", "bob@x.io", "Claude <noreply@anthropic.com>") + "\n" +
+		authorRec("sha3", "2026-01-03T09:00:00Z", "Bob", "bob@x.io", "") + "\n" +
+		authorRec("sha2", "2026-01-02T08:00:00Z", "Ada", "ada@x.io", "") + "\n" +
+		authorRec("sha1", "2026-01-01T07:00:00Z", "Ada", "ada@x.io", "")
 	got := parseHistory([]byte(data))
 
 	if got.Commits != 4 {
@@ -234,20 +234,59 @@ func TestParseHistory(t *testing.T) {
 			t.Errorf("Authors[%d] = %+v, want %+v", i, got.Authors[i], w)
 		}
 	}
+
+	// Each ranked bucket also gets its own sub-stats keyed by name.
+	if len(got.ByAuthor) != 3 {
+		t.Fatalf("ByAuthor has %d entries, want 3", len(got.ByAuthor))
+	}
+	if ada, ok := got.ByAuthor["Ada"]; !ok || ada.Commits != 2 {
+		t.Errorf("ByAuthor[Ada].Commits = %d (present=%v), want 2", ada.Commits, ok)
+	}
+	if claude, ok := got.ByAuthor["Claude"]; !ok || claude.Commits != 1 {
+		t.Errorf("ByAuthor[Claude].Commits = %d (present=%v), want 1", claude.Commits, ok)
+	}
+
+	// Per-author SHA lists back the lazy module computation: Ada's two commits, and
+	// the co-authored commit classifies to Claude's bucket (not Bob's).
+	if ada := got.AuthorSHAs["Ada"]; len(ada) != 2 || ada[0] != "sha2" || ada[1] != "sha1" {
+		t.Errorf("AuthorSHAs[Ada] = %v, want [sha2 sha1]", ada)
+	}
+	if claude := got.AuthorSHAs["Claude"]; len(claude) != 1 || claude[0] != "sha4" {
+		t.Errorf("AuthorSHAs[Claude] = %v, want [sha4]", claude)
+	}
+	if bob := got.AuthorSHAs["Bob"]; len(bob) != 1 || bob[0] != "sha3" {
+		t.Errorf("AuthorSHAs[Bob] = %v, want [sha3]", bob)
+	}
 }
 
 func TestParseHistoryTimeSeries(t *testing.T) {
 	// Same four commits as TestParseHistory: one AI (Claude) on Jan 4, humans on
 	// Jan 1–3, spanning four contiguous days.
-	data := authorRec("2026-01-04T10:00:00Z", "Bob", "bob@x.io", "Claude <noreply@anthropic.com>") + "\n" +
-		authorRec("2026-01-03T09:00:00Z", "Bob", "bob@x.io", "") + "\n" +
-		authorRec("2026-01-02T08:00:00Z", "Ada", "ada@x.io", "") + "\n" +
-		authorRec("2026-01-01T07:00:00Z", "Ada", "ada@x.io", "")
+	data := authorRec("sha4", "2026-01-04T10:00:00Z", "Bob", "bob@x.io", "Claude <noreply@anthropic.com>") + "\n" +
+		authorRec("sha3", "2026-01-03T09:00:00Z", "Bob", "bob@x.io", "") + "\n" +
+		authorRec("sha2", "2026-01-02T08:00:00Z", "Ada", "ada@x.io", "") + "\n" +
+		authorRec("sha1", "2026-01-01T07:00:00Z", "Ada", "ada@x.io", "")
 	got := parseHistory([]byte(data))
 
 	if want := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC); !got.Start.Equal(want) {
 		t.Errorf("Start = %v, want %v", got.Start, want)
 	}
+	if want := time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC); !got.End.Equal(want) {
+		t.Errorf("End = %v, want %v", got.End, want)
+	}
+
+	// Ada's sub-stats cover only her two days (Jan 1–2), not the repo's full span.
+	ada := got.ByAuthor["Ada"]
+	if want := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC); !ada.Start.Equal(want) {
+		t.Errorf("ByAuthor[Ada].Start = %v, want %v", ada.Start, want)
+	}
+	if want := time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC); !ada.End.Equal(want) {
+		t.Errorf("ByAuthor[Ada].End = %v, want %v", ada.End, want)
+	}
+	if wantAda := []DayCount{{Human: 1}, {Human: 1}}; len(ada.Daily) != len(wantAda) {
+		t.Errorf("ByAuthor[Ada].Daily = %v, want %v", ada.Daily, wantAda)
+	}
+
 	wantDaily := []DayCount{{Human: 1}, {Human: 1}, {Human: 1}, {AI: 1}}
 	if len(got.Daily) != len(wantDaily) {
 		t.Fatalf("Daily len = %d (%v), want %d", len(got.Daily), got.Daily, len(wantDaily))
@@ -287,14 +326,66 @@ func TestParseHistoryTimeSeries(t *testing.T) {
 // A commit whose date doesn't parse still counts in the ranking but adds no
 // time-series point — the series must stay consistent.
 func TestParseHistoryUndatedCommit(t *testing.T) {
-	data := authorRec("", "Ada", "ada@x.io", "") + "\n" +
-		authorRec("2026-01-01T07:00:00Z", "Ada", "ada@x.io", "")
+	data := authorRec("sha2", "", "Ada", "ada@x.io", "") + "\n" +
+		authorRec("sha1", "2026-01-01T07:00:00Z", "Ada", "ada@x.io", "")
 	got := parseHistory([]byte(data))
 	if got.Commits != 2 {
 		t.Errorf("Commits = %d, want 2", got.Commits)
 	}
 	if len(got.Daily) != 1 || got.Daily[0].Human != 1 {
 		t.Errorf("Daily = %v, want one day with 1 human commit", got.Daily)
+	}
+	// The undated commit still belongs to the author's SHA list (it's a real commit,
+	// just without a time-series point).
+	if shas := got.AuthorSHAs["Ada"]; len(shas) != 2 {
+		t.Errorf("AuthorSHAs[Ada] = %v, want 2 SHAs", shas)
+	}
+}
+
+func TestModuleKey(t *testing.T) {
+	cases := []struct{ path, want string }{
+		{"internal/tui/overview.go", "internal/tui"},
+		{"cmd/diffcat/main.go", "cmd/diffcat"},
+		{"internal/git.go", "internal"},
+		{"README.md", "(root)"},
+		{"", "(root)"},
+	}
+	for _, tc := range cases {
+		if got := moduleKey(tc.path); got != tc.want {
+			t.Errorf("moduleKey(%q) = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
+// parseAuthorModules sums added+deleted lines per area, descending, across the
+// numstat rows of one contributor's commits — with binary files (numstat "-") and
+// pure renames (0\t0) contributing nothing.
+func TestParseAuthorModules(t *testing.T) {
+	// `git log --numstat --pretty=format:` output for two of an author's commits:
+	// only numstat rows and blank separators between commits.
+	data := "10\t2\tinternal/tui/view.go\n" + // internal/tui: 12
+		"3\t0\tinternal/git/git.go\n" + // internal/git: 3
+		"-\t-\tassets/logo.png\n" + // binary → 0, must not rank
+		"\n" +
+		"5\t1\tinternal/tui/update.go\n" + // internal/tui: +6 → 18 total
+		"0\t0\tinternal/git/old.go\n" // pure rename/no-op → 0
+
+	mods := parseAuthorModules([]byte(data))
+	want := []ModuleCount{
+		{Path: "internal/tui", Lines: 18},
+		{Path: "internal/git", Lines: 3},
+	}
+	if len(mods) != len(want) {
+		t.Fatalf("Modules = %+v, want %+v", mods, want)
+	}
+	for i, w := range want {
+		if mods[i] != w {
+			t.Errorf("Modules[%d] = %+v, want %+v", i, mods[i], w)
+		}
+	}
+
+	if got := parseAuthorModules(nil); len(got) != 0 {
+		t.Errorf("parseAuthorModules(nil) = %v, want empty", got)
 	}
 }
 
