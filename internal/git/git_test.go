@@ -347,8 +347,10 @@ func TestModuleKey(t *testing.T) {
 		{"internal/tui/overview.go", "internal/tui"},
 		{"cmd/diffcat/main.go", "cmd/diffcat"},
 		{"internal/git.go", "internal"},
-		{"README.md", "(root)"},
-		{"", "(root)"},
+		{"src/controllers/api/v1/user.go", "src/controllers/api/v1"},
+		{"a/b/c/d/e/f/deep.go", "a/b/c/d"}, // capped at four directory segments
+		{"README.md", ""},
+		{"", ""},
 	}
 	for _, tc := range cases {
 		if got := moduleKey(tc.path); got != tc.want {
@@ -366,6 +368,7 @@ func TestParseAuthorModules(t *testing.T) {
 	data := "10\t2\tinternal/tui/view.go\n" + // internal/tui: 12
 		"3\t0\tinternal/git/git.go\n" + // internal/git: 3
 		"-\t-\tassets/logo.png\n" + // binary → 0, must not rank
+		"40\t5\tREADME.md\n" + // top-level file → no module, must not rank
 		"\n" +
 		"5\t1\tinternal/tui/update.go\n" + // internal/tui: +6 → 18 total
 		"0\t0\tinternal/git/old.go\n" // pure rename/no-op → 0

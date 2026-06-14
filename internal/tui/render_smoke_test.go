@@ -66,7 +66,7 @@ func sampleHistory() git.HistoryStats {
 			{Path: "internal/tui", Lines: 4200},
 			{Path: "internal/git", Lines: 1800},
 			{Path: "cmd/diffcat", Lines: 300},
-			{Path: "(root)", Lines: 90},
+			{Path: "scripts", Lines: 90},
 		}),
 		"Ada Lovelace": mkAuthor(31, false, []git.ModuleCount{
 			{Path: "internal/git", Lines: 900},

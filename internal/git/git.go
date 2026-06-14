@@ -744,21 +744,19 @@ func sortModuleCounts(mods []ModuleCount) {
 }
 
 // moduleKey groups a changed file path into a codebase "area" for the per-author
-// module ranking: the first two path segments (e.g. "internal/tui", "cmd/diffcat"),
-// or the single segment when that's all there is, or "(root)" for a top-level file.
+// module ranking: the file's directory, capped to its first four segments (e.g.
+// "internal/tui", "src/controllers/api/v1"). Top-level files have no meaningful
+// area, so they return "" and are dropped from the ranking.
 func moduleKey(path string) string {
-	if path == "" {
-		return "(root)"
-	}
 	parts := strings.Split(path, "/")
-	switch len(parts) {
-	case 1:
-		return "(root)"
-	case 2:
-		return parts[0]
-	default:
-		return parts[0] + "/" + parts[1]
+	dirs := len(parts) - 1 // directory segments, dropping the filename
+	if dirs < 1 {
+		return "" // top-level file — no meaningful area
 	}
+	if dirs > 4 {
+		dirs = 4
+	}
+	return strings.Join(parts[:dirs], "/")
 }
 
 // HistoryStats summarizes everything reachable from a revision: the non-merge
@@ -1041,7 +1039,11 @@ func parseAuthorModules(data []byte) []ModuleCount {
 		if len(ns) < 3 {
 			continue
 		}
-		byModule[moduleKey(ns[2])] += parseNumstat(ns[0]) + parseNumstat(ns[1])
+		key := moduleKey(ns[2])
+		if key == "" { // top-level file — no meaningful module, skip it
+			continue
+		}
+		byModule[key] += parseNumstat(ns[0]) + parseNumstat(ns[1])
 	}
 	mods := make([]ModuleCount, 0, len(byModule))
 	for p, n := range byModule {

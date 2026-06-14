@@ -887,16 +887,35 @@ func moduleBlock(hs git.HistoryStats, width int) []string {
 	if peak <= 0 {
 		return nil
 	}
-	const maxRows, label = 6, 14
-	barW := width - 3 - label - len(fmt.Sprintf(" %d", peak))
-	if barW < 6 {
+	const maxRows = 6
+	rows := min(maxRows, len(hs.Modules))
+	numW := len(fmt.Sprintf(" %d", peak))
+
+	// Size the label column to the longest path actually shown, so module paths
+	// read in full wherever the column has room; only truncate when the path would
+	// crowd the bar below a usable minimum.
+	const minBar = 8
+	label := 0
+	for i := 0; i < rows; i++ {
+		if l := len(hs.Modules[i].Path); l > label {
+			label = l
+		}
+	}
+	if maxLabel := width - 3 - numW - minBar; label > maxLabel {
+		label = maxLabel
+	}
+	if label < 1 {
+		return nil
+	}
+	barW := width - 3 - label - numW
+	if barW < minBar {
 		return nil
 	}
 	if barW > 24 {
 		barW = 24
 	}
 	out := []string{headingStyle.Render("  Top modules")}
-	for i := 0; i < min(maxRows, len(hs.Modules)); i++ {
+	for i := 0; i < rows; i++ {
 		mod := hs.Modules[i]
 		filled := mod.Lines * barW / peak
 		if mod.Lines > 0 && filled == 0 {
@@ -906,7 +925,7 @@ func moduleBlock(hs git.HistoryStats, width int) []string {
 			filled = barW
 		}
 		bar := addedStyle.Render(strings.Repeat("█", filled)) + borderStyle.Render(strings.Repeat("░", barW-filled))
-		out = append(out, "  "+mutedStyle.Render(padRight(truncateText(mod.Path, label), label))+" "+
+		out = append(out, "  "+metaStyle.Render(padRight(truncateText(mod.Path, label), label))+" "+
 			bar+mutedStyle.Render(fmt.Sprintf(" %d", mod.Lines)))
 	}
 	return out
