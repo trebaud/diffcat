@@ -160,6 +160,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.historyStats = msg.stats
 		m.historyComputed = true
 		m.historyComputing = false
+		// A live HEAD move while a contributor's detail page is open invalidates
+		// the whole-history cache (refresh drops historyComputed and the lazy
+		// authorModules), so this recompute is the first point the fresh
+		// AuthorSHAs exist. Re-kick the open author's module ranking against them
+		// so the heatmap reappears updated rather than staying blank until the
+		// page is reopened.
+		if m.mode == viewAuthorDetail {
+			return m, m.ensureAuthorModules(m.detailAuthor)
+		}
 		return m, nil
 
 	case authorModulesMsg:
