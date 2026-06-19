@@ -40,10 +40,19 @@ type resolved struct {
 	dark         bool
 }
 
+// configPath returns the preference file location, following the XDG Base
+// Directory spec: $XDG_CONFIG_HOME/diffcat/config.json, falling back to
+// ~/.config/diffcat/config.json. This is used on every platform (unlike
+// os.UserConfigDir, which resolves to ~/Library/Application Support on macOS)
+// so the documented ~/.config path holds everywhere.
 func configPath() (string, error) {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return "", err
+	dir := os.Getenv("XDG_CONFIG_HOME")
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(home, ".config")
 	}
 	return filepath.Join(dir, "diffcat", "config.json"), nil
 }
