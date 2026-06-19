@@ -38,7 +38,8 @@ func main() {
 }
 
 func rootCmd() *cobra.Command {
-	var base string
+	var base, theme, icons string
+	var noAnim bool
 
 	root := &cobra.Command{
 		Use:           "diffcat [path]",
@@ -47,15 +48,23 @@ func rootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Args:          cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			dir := "."
 			if len(args) > 0 {
 				dir = args[0]
 			}
-			return tui.Run(dir, base)
+			return tui.Run(dir, base, tui.Options{
+				Theme:     theme,
+				Icons:     icons,
+				NoAnim:    noAnim,
+				NoAnimSet: cmd.Flags().Changed("no-anim"),
+			})
 		},
 	}
 	root.PersistentFlags().StringVarP(&base, "base", "b", "", "Base ref to diff against (default: auto-detect master/main)")
+	root.Flags().StringVar(&theme, "theme", "", "Color theme: github, dracula, nord, catppuccin, gruvbox, tokyonight, solarized, monochrome")
+	root.Flags().StringVar(&icons, "icons", "", "File-type icon set: ascii, unicode, nerd")
+	root.Flags().BoolVar(&noAnim, "no-anim", false, "Disable animations (nyan cat, pulse, shimmer)")
 	root.SetVersionTemplate("diffcat v{{.Version}}\n")
 	root.Flags().BoolP("version", "v", false, "Show version")
 

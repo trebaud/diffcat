@@ -120,6 +120,9 @@ func (m model) render() string {
 	if m.fileFindActive {
 		return m.floatOverlay(screen, m.fileFindBox())
 	}
+	if m.showThemePicker {
+		return m.floatOverlay(screen, m.themePickerBox())
+	}
 	return screen
 }
 
@@ -142,11 +145,17 @@ func (m model) floatOverlay(screen, box string) string {
 // pulled most of the way toward the scrim (so it recedes yet stays faintly
 // legible); backgrounds are nudged less so colored bands just lose their punch.
 func dimCanvas(canvas *lipgloss.Canvas) {
-	dark := colCanvas == nil
+	// The scrim is the theme's own canvas; a nil canvas (GitHub dark / Monochrome,
+	// which respect the terminal) falls back to the github-dark tone. Whether the
+	// scrim is light or dark drives the default foreground used for cells that
+	// carry no explicit color, so they still recede legibly.
 	scrim := color.RGBA{R: 0x0d, G: 0x11, B: 0x17, A: 0xff} // github dark canvas
+	if colCanvas != nil {
+		r, g, b, _ := colCanvas.RGBA()
+		scrim = color.RGBA{R: uint8(r / 257), G: uint8(g / 257), B: uint8(b / 257), A: 0xff}
+	}
 	defaultFg := color.RGBA{R: 0xad, G: 0xbc, B: 0xc7, A: 0xff}
-	if !dark {
-		scrim = color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	if luminance(scrim) >= 0.5 {
 		defaultFg = color.RGBA{R: 0x1f, G: 0x23, B: 0x28, A: 0xff}
 	}
 	w, h := canvas.Width(), canvas.Height()
@@ -166,6 +175,13 @@ func dimCanvas(canvas *lipgloss.Canvas) {
 			}
 		}
 	}
+}
+
+// luminance returns the perceived brightness of c in [0,1] (Rec. 601 weights),
+// used to decide whether a theme's canvas reads as light or dark.
+func luminance(c color.Color) float64 {
+	r, g, b, _ := c.RGBA()
+	return (0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)) / 65535
 }
 
 // blendColor linearly interpolates from a toward b by t (0 = a, 1 = b).
@@ -546,26 +562,41 @@ func (m model) treeRow(r treeRow, selected bool, width int) string {
 		statsPlain = fmt.Sprintf("+%d -%d", r.added, r.deleted)
 	}
 
-	// Layout budget: prefix + glyph(1) + space(1) + name + gap + stats.
+	// Optional file-type icon, shown between the status glyph and the name (files
+	// only; folders keep their chevron). "" on the ascii tier — the original
+	// layout, unchanged.
+	icon := ""
+	if !r.isDir && m.iconSet != iconASCII {
+		icon = fileIcon(r.path, m.iconSet)
+	}
+	iconPlain := ""
+	iconCol := 0
+	if icon != "" {
+		iconPlain = icon + " "
+		iconCol = lipgloss.Width(iconPlain)
+	}
+
+	// Layout budget: prefix + glyph(1) + space(1) + icon + name + gap + stats.
 	statsW := lipgloss.Width(statsPlain)
-	avail := width - prefixW - 2 - statsW - 1
+	avail := width - prefixW - 2 - iconCol - statsW - 1
 	if avail < 3 {
 		avail = 3
 	}
 	name := truncateText(label, avail)
 
-	gap := width - prefixW - 2 - lipgloss.Width(name) - statsW
+	gap := width - prefixW - 2 - iconCol - lipgloss.Width(name) - statsW
 	if gap < 1 {
 		gap = 1
 	}
 
 	if selected {
-		row := treeGuidesPlain(r.guides) + glyph + " " + name + strings.Repeat(" ", gap) + statsPlain
+		row := treeGuidesPlain(r.guides) + glyph + " " + iconPlain + name + strings.Repeat(" ", gap) + statsPlain
 		return selectedRowStyle.Width(width).Render(row)
 	}
 
 	nameStyled := name
 	glyphStyled := statusStyle(r.status).Render(glyph)
+	iconStyled := mutedStyle.Render(iconPlain)
 	if r.isDir {
 		nameStyled = dirStyle.Render(name)
 		glyphStyled = dirStyle.Render(glyph)
@@ -576,7 +607,7 @@ func (m model) treeRow(r treeRow, selected bool, width int) string {
 	// On top of that, the instant a change lands a bright highlight sweeps once
 	// across the name — a clear "this just changed" cue that then clears itself,
 	// leaving the quieter glyph pulse to carry on.
-	if !r.isDir && m.unseen[r.path] {
+	if !r.isDir && m.unseen[r.path] && !m.reduceMotion {
 		glyphStyled = lipgloss.NewStyle().Foreground(pulseShade(m.animFrame)).Bold(true).Render(glyph)
 		if swept, live := shimmerName(name, m.animFrame-m.unseenAt[r.path]); live {
 			nameStyled = swept
@@ -588,7 +619,7 @@ func (m model) treeRow(r treeRow, selected bool, width int) string {
 		stats = addedStyle.Render(fmt.Sprintf("+%d", r.added)) + " " +
 			removedStyle.Render(fmt.Sprintf("-%d", r.deleted))
 	}
-	return treeGuides(r.guides) + glyphStyled + " " +
+	return treeGuides(r.guides) + glyphStyled + " " + iconStyled +
 		nameStyled + strings.Repeat(" ", gap) + stats
 }
 
@@ -984,6 +1015,9 @@ func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg, emphBg
 			if sp.fg != nil {
 				st = st.Foreground(sp.fg)
 			}
+			if sp.italic {
+				st = st.Italic(true)
+			}
 			seg := string(runes[k:j])
 			segW := lipgloss.Width(seg)
 			remaining := width - used
@@ -1080,6 +1114,11 @@ func truncateText(s string, max int) string {
 func (m model) nyanProgress(width int) string {
 	if m.focus != focusDiff {
 		return strings.Repeat(" ", max(0, width))
+	}
+	// Reduce-motion: the spring tick never runs (nyanPos stays put), so place the
+	// cat directly at the reading position with a settled face — a static bar.
+	if m.reduceMotion {
+		return nyanBar(width, m.targetFrac(), 0, 0)
 	}
 	return nyanBar(width, m.nyanPos, m.animFrame, m.nyanSettle)
 }
@@ -1288,7 +1327,7 @@ func (m model) helpBox() string {
 		"",
 		headingStyle.Render("  view"),
 		"  s            toggle unified / side-by-side",
-		"  t            toggle light / dark theme",
+		"  t            choose theme (colors · light/dark · icons · motion)",
 		"  r            refresh from disk (also auto-syncs in the background)",
 		"  ? / q        toggle help / quit",
 		"",

@@ -25,7 +25,7 @@ diffcat is narrower on purpose, its main focus is on making the git diff view ex
 
 - TUI with native vim keybindings
 - GitHub-style diffs: green/red tints, line-number gutters, syntax highlighting, surrounding-line expansion
-- Unified or side-by-side view (`s`), light/dark theme (`t`)
+- Unified or side-by-side view (`s`); a theme picker (`t`) with 8 color themes, light/dark, file-type icons, and a reduce-motion toggle
 - Auto-detected base, or any ref via `--base`
 - Commit history view with per-commit diffs
 - Stats dashboard (`S`): contribution calendar, per-author ranking, activity charts, streaks, and a human-vs-AI split that names each agent
@@ -77,6 +77,29 @@ diffcat -b 3f9a1c2
 ```
 
 Without `--base`, the base is auto-detected: `origin/HEAD`, else `master`, else `main`.
+
+## Themes & appearance
+
+Press `t` in the TUI for the theme picker: arrow through the themes with a live
+preview, `T` flips light/dark, `i` cycles the file-type icon set, `m` toggles
+animations, `↵` keeps the choice (persisted), `esc` reverts. Your selection is
+saved to `~/.config/diffcat/config.json` and restored on the next run.
+
+You can also set appearance up front, via flags or environment variables:
+
+```bash
+diffcat --theme dracula           # github (default), dracula, nord, catppuccin,
+                                  # gruvbox, tokyonight, solarized, monochrome
+diffcat --icons nerd              # ascii (default), unicode, nerd (needs a Nerd Font)
+diffcat --no-anim                 # freeze the nyan cat, pulse, and shimmer
+
+DIFFCAT_THEME=nord diffcat        # env equivalents: DIFFCAT_THEME, DIFFCAT_ICONS,
+                                  # DIFFCAT_NO_ANIM
+```
+
+Precedence is flag → environment → saved config → terminal auto-detection.
+[`NO_COLOR`](https://no-color.org) is honored: when set, diffcat forces the
+monochrome theme and freezes all motion.
 
 ## License
 

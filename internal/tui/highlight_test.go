@@ -28,7 +28,7 @@ func TestExpandTabs(t *testing.T) {
 // the requested width — the no-wrap invariant the diff pane depends on — across
 // truncation, padding, and tab-expanded lines, with a real lexer driving colors.
 func TestRenderCodeWidth(t *testing.T) {
-	ApplyTheme(true)
+	ApplyTheme(themeGitHub, true)
 	m := model{lexer: lexerFor("x.go"), hlCache: map[string][]span{}}
 	lines := []string{
 		"func newer(n int) string {",
@@ -60,7 +60,7 @@ func TestRenderCodeWidth(t *testing.T) {
 // TestHighlightColorsCode confirms a known Go keyword gets a non-default color
 // and that splitting preserves the line's text content.
 func TestHighlightColorsCode(t *testing.T) {
-	ApplyTheme(true)
+	ApplyTheme(themeGitHub, true)
 	spans := tokenizeLine(lexerFor("x.go"), "func main() {}")
 	var rebuilt strings.Builder
 	colored := false
@@ -83,7 +83,7 @@ func TestHighlightColorsCode(t *testing.T) {
 // and most identifiers flat), subcategory fallback so every number/string subtype
 // shares its category color, and theme sensitivity.
 func TestTokenColorPalette(t *testing.T) {
-	applyHighlightTheme(true)
+	ApplyTheme(themeGitHub, true)
 
 	str := tokenColor(chroma.LiteralStringDouble)
 	num := tokenColor(chroma.LiteralNumberInteger)
@@ -125,9 +125,9 @@ func TestTokenColorPalette(t *testing.T) {
 	}
 
 	// Theme sensitivity: the light palette differs from the dark one.
-	applyHighlightTheme(false)
+	ApplyTheme(themeGitHub, false)
 	if tokenColor(chroma.Keyword) == kw {
 		t.Error("keyword color should differ between light and dark themes")
 	}
-	applyHighlightTheme(true) // restore for other tests
+	ApplyTheme(themeGitHub, true) // restore for other tests
 }

@@ -146,7 +146,26 @@ type model struct {
 	width  int
 	height int
 
-	dark bool // current theme; toggled with `t`, seeds the style table on rebuild
+	dark     bool    // light/dark variant of the active theme
+	themeIdx int     // active theme's index into themes; the picker advances it
+	iconSet  iconSet // file-type icon tier (ascii/unicode/nerd)
+
+	// reduceMotion freezes the nyan cat, the unopened-file pulse, and the change
+	// shimmer (for recordings, CI, low-power terminals, NO_COLOR, motion
+	// sensitivity). When set, Init skips the recurring tick.
+	reduceMotion bool
+
+	// ticking records whether the animation tick loop is live, so toggling motion
+	// back on mid-session re-arms exactly one loop (never two).
+	ticking bool
+
+	// Theme picker overlay (`t`). showThemePicker gates it; themeSel is the
+	// highlighted row; snapTheme/snapDark are the on-open snapshot restored when
+	// the picker is dismissed with esc.
+	showThemePicker bool
+	themeSel        int
+	snapTheme       int
+	snapDark        bool
 
 	animFrame int // drives the nyan cat's leg/face wiggle
 
@@ -242,7 +261,7 @@ type model struct {
 	err error
 }
 
-func newModel(repo, base, baseName string, baseIsDefault bool, branch string, files []git.FileChange, shortstat string, dark bool) model {
+func newModel(repo, base, baseName string, baseIsDefault bool, branch string, files []git.FileChange, shortstat string, r resolved) model {
 	m := model{
 		sidebar:         sidebarNormal,
 		repo:            repo,
@@ -255,7 +274,11 @@ func newModel(repo, base, baseName string, baseIsDefault bool, branch string, fi
 		collapsed:       map[string]bool{},
 		commitDiffCache: map[string][]diff.Line{},
 		baseStart:       -1,
-		dark:            dark,
+		dark:            r.dark,
+		themeIdx:        r.themeIdx,
+		iconSet:         r.iconSet,
+		reduceMotion:    r.reduceMotion,
+		ticking:         !r.reduceMotion,
 		syncFingerprint: git.Fingerprint(repo, baseName),
 		fileSig:         fileSignatures(files),
 		unseen:          map[string]bool{},
@@ -375,7 +398,14 @@ func (m model) selectedRow() *treeRow {
 	return nil
 }
 
-func (m model) Init() tea.Cmd { return tea.Batch(tickCmd(tickSlow), syncCmd(m.repo, m.baseName)) }
+func (m model) Init() tea.Cmd {
+	// Reduce-motion freezes every animation, so there's no need for the recurring
+	// tick — only the background git-state poll keeps running.
+	if m.reduceMotion {
+		return syncCmd(m.repo, m.baseName)
+	}
+	return tea.Batch(tickCmd(tickSlow), syncCmd(m.repo, m.baseName))
+}
 
 // selectedFile returns the file under the cursor, or nil when the cursor is on a
 // folder row (or the tree is empty) — those have no diff to show.

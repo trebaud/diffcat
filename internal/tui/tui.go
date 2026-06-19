@@ -17,8 +17,10 @@ import (
 )
 
 // Run computes the diff of the repo at dir against baseName and launches the
-// interactive viewer. baseName may be empty to auto-detect (master → main).
-func Run(dir, baseName string) error {
+// interactive viewer. baseName may be empty to auto-detect (master → main). opts
+// carries command-line overrides for theme/icons/motion; they're layered over
+// the env, the saved config, and terminal auto-detection by resolveOptions.
+func Run(dir, baseName string, opts Options) error {
 	repo, err := git.RepoRoot(dir)
 	if err != nil {
 		return err
@@ -38,9 +40,10 @@ func Run(dir, baseName string) error {
 	branch := git.CurrentBranch(repo)
 	shortstat := git.Shortstat(repo, base)
 
-	dark := DetectAndApplyTheme()
+	r := resolveOptions(opts, loadConfig())
+	ApplyTheme(themes[r.themeIdx], r.dark)
 
-	p := tea.NewProgram(newModel(repo, base, baseName, baseIsDefault, branch, files, shortstat, dark))
+	p := tea.NewProgram(newModel(repo, base, baseName, baseIsDefault, branch, files, shortstat, r))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
 		os.Exit(1)

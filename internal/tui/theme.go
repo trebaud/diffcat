@@ -2,7 +2,6 @@ package tui
 
 import (
 	"image/color"
-	"os"
 
 	"charm.land/lipgloss/v2"
 )
@@ -100,28 +99,57 @@ var (
 	colSearchCurBg color.Color
 )
 
-func init() { ApplyTheme(true) }
+// pal is the active resolved palette (the light or dark half of the active
+// theme). highlight.go reads its syntax slots so token colors track the theme.
+var pal Palette
 
-// ApplyTheme rebuilds the style table for the current terminal background.
-func ApplyTheme(isDark bool) {
-	ld := lipgloss.LightDark(isDark)
+// activeThemeIdx is the index into themes of the active theme — the picker reads
+// and advances it; setTheme keeps it in sync with what ApplyTheme last applied.
+var activeThemeIdx int
 
-	// Tuned truecolor neutrals. colMuted is the same gray the syntax highlighter
-	// uses for comments (~4.6:1 on the dark canvas — well above the ANSI-8 it
-	// replaced, which rendered at whatever low contrast the terminal theme chose).
-	colMuted = ld(lipgloss.Color("#6e7781"), lipgloss.Color("#8b949e"))
-	colRowBg = ld(lipgloss.Color("#eaeef2"), lipgloss.Color("#21262d"))
-	colBorder = ld(lipgloss.Color("#d0d7de"), lipgloss.Color("#30363d"))
-	colSelect = ld(lipgloss.Color("#0969da"), lipgloss.Color("#58a6ff"))
+func init() { ApplyTheme(themeGitHub, true) }
 
-	// Light mode paints an explicit canvas (GitHub's page bg + ink); dark mode
-	// keeps nil so the user's terminal background shows through, as before.
-	if isDark {
-		colCanvas, colText = nil, nil
-	} else {
-		colCanvas, colText = lipgloss.Color("#ffffff"), lipgloss.Color("#1f2328")
+// ApplyTheme rebuilds the style table from theme t for the current terminal
+// background, selecting t's light or dark palette and assigning every semantic
+// color from it. The style-construction below is theme-agnostic: it reads only
+// the resolved color vars, so adding a theme is purely a matter of supplying a
+// Palette.
+func ApplyTheme(t Theme, isDark bool) {
+	activeThemeIdx = themeIndex(t)
+	p := t.Dark
+	if !isDark {
+		p = t.Light
 	}
-	colOverlayBg = ld(lipgloss.Color("#ffffff"), lipgloss.Color("#161b22"))
+	pal = p
+
+	// Brand + semantic hues. GitHub keeps these on the ANSI 16 indices so the
+	// user's terminal palette drives them (the long-standing default); other
+	// themes supply tuned truecolor.
+	colAccent = p.Accent
+	colAdded = p.Added
+	colRemoved = p.Removed
+	colMeta = p.Meta
+	colWarn = p.Warn
+
+	// Tuned neutrals. colMuted is the same gray the syntax highlighter uses for
+	// comments (~4.6:1 on the dark canvas — well above the ANSI-8 it replaced,
+	// which rendered at whatever low contrast the terminal theme chose).
+	colMuted = p.Muted
+	colRowBg = p.RowBg
+	colBorder = p.Border
+	colSelect = p.Select
+
+	// Light mode typically paints an explicit canvas (a page bg + ink); dark
+	// mode keeps nil so the user's terminal background shows through. A palette
+	// signals "respect the terminal" with a nil Canvas.
+	colCanvas, colText = p.Canvas, p.Text
+	colOverlayBg = p.OverlayBg
+
+	addBg, addGut, addFg := p.AddBg, p.AddGut, p.AddFg
+	delBg, delGut, delFg := p.DelBg, p.DelGut, p.DelFg
+	hunkBg, hunkFg := p.HunkBg, p.HunkFg
+	fillBg := p.FillBg
+	expandBg := p.ExpandBg
 
 	titleStyle = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 	catStyle = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
@@ -149,50 +177,32 @@ func ApplyTheme(isDark bool) {
 	// Diff tints are two-tier, GitHub-style: a deep, saturated *body* band the code
 	// text sits on, and a brighter, more vivid *gutter* band behind the line
 	// numbers and the +/- marker. The lightness gap between the two is what gives
-	// the diff its fluorescent depth on a dark canvas. The dark values are tuned in
-	// OKLCH at one constant body lightness (L≈0.30, chroma pushed to the gamut
-	// edge) so add/del/hunk read as a single balanced set rather than three
-	// mismatched browns; light values are GitHub's own. Code text keeps ≥8:1 on the
-	// dark body, markers ≥4.3:1 on their gutter. All map to the nearest 256/16
-	// color where truecolor isn't available.
-	addBg := ld(lipgloss.Color("#e6ffec"), lipgloss.Color("#003914"))
-	addGut := ld(lipgloss.Color("#abf2bc"), lipgloss.Color("#00672c"))
-	addFg := ld(lipgloss.Color("#1a7f37"), lipgloss.Color("#7fe998"))
-	delBg := ld(lipgloss.Color("#ffebe9"), lipgloss.Color("#5d0003"))
-	delGut := ld(lipgloss.Color("#ffc1bc"), lipgloss.Color("#a4000d"))
-	delFg := ld(lipgloss.Color("#cf222e"), lipgloss.Color("#ffa598"))
-	hunkBg := ld(lipgloss.Color("#ddf4ff"), lipgloss.Color("#002c60"))
-	hunkFg := ld(lipgloss.Color("#0969da"), lipgloss.Color("#88d1ff"))
-	fillBg := ld(lipgloss.Color("#f6f8fa"), lipgloss.Color("#0d1117"))
-	// Expand affordance: a faint cool band, just distinct enough from the canvas to
-	// read as a row (the old fill tint was the canvas itself, so it vanished).
-	expandBg := ld(lipgloss.Color("#eef4fb"), lipgloss.Color("#12202f"))
-
+	// the diff its fluorescent depth on a dark canvas. GitHub's dark values are
+	// tuned in OKLCH at one constant body lightness (L≈0.30, chroma pushed to the
+	// gamut edge) so add/del/hunk read as a single balanced set rather than three
+	// mismatched browns; light values are GitHub's own. All map to the nearest
+	// 256/16 color where truecolor isn't available.
 	diffAddBg, diffDelBg = addBg, delBg
 	// The word-level emphasis reuses the brighter gutter band: GitHub's intra-line
 	// highlight (#abf2bc / #ffc1bc in light) is exactly that tone, and on the dark
 	// theme the gutter green/red already reads as a stronger step above the body.
 	diffAddEmphBg, diffDelEmphBg = addGut, delGut
 
-	// A gentle breathing ramp toward the same info-blue as hunk headers — dim to
-	// bright, so the glyph eases in and out rather than blinking. Six stops on a
-	// perceptually-even OKLCH path (hue 250, lightness + chroma rising together),
-	// so the breath reads as a smooth fade rather than the visible steps a short
-	// ramp gives. Distinct from the magenta brand and the add/del green/red.
-	pulseRamp = []color.Color{
-		ld(lipgloss.Color("#b9c9db"), lipgloss.Color("#233447")),
-		ld(lipgloss.Color("#98b7d8"), lipgloss.Color("#304b67")),
-		ld(lipgloss.Color("#77a5d4"), lipgloss.Color("#3d6389")),
-		ld(lipgloss.Color("#5392d0"), lipgloss.Color("#4a7cad")),
-		ld(lipgloss.Color("#297ecb"), lipgloss.Color("#5895d3")),
-		ld(lipgloss.Color("#006ac5"), lipgloss.Color("#67b0f9")),
+	// A gentle breathing ramp toward the selection accent — dim to bright, so an
+	// unopened changed file's glyph eases in and out rather than blinking. GitHub
+	// supplies six hand-tuned OKLCH stops; other themes derive a ramp from their
+	// own neutral→accent so the breath stays on-palette.
+	if len(p.Pulse) >= 2 {
+		pulseRamp = p.Pulse
+	} else {
+		pulseRamp = derivePulse(p.RowBg, p.Select)
 	}
 
-	// Search highlight: GitHub's find-on-page amber. The current match steps up to
-	// a brighter gold so n/N's target stands out from the other hits. Tuned per
-	// theme so token foregrounds stay legible over the band.
-	colSearchBg = ld(lipgloss.Color("#fff8c5"), lipgloss.Color("#4a3a00"))
-	colSearchCurBg = ld(lipgloss.Color("#f6c343"), lipgloss.Color("#9e6a03"))
+	// Search highlight: a find-on-page amber band, the current match a brighter
+	// gold so n/N's target stands out. Tuned per theme so token foregrounds stay
+	// legible over the band.
+	colSearchBg = p.SearchBg
+	colSearchCurBg = p.SearchCurBg
 
 	// Header: the current branch reads bright (inherits the terminal fg, just
 	// bold), while the base branch is a blue "info" pill — the same GitHub blue
@@ -203,7 +213,7 @@ func ApplyTheme(isDark bool) {
 
 	// Git tags read in a subtle gold — git's own decoration color for tags, kept
 	// muted (not bold) so they sit quietly beside the brighter subject/SHA.
-	tagStyle = lipgloss.NewStyle().Foreground(ld(lipgloss.Color("#9a6700"), lipgloss.Color("#d4a72c")))
+	tagStyle = lipgloss.NewStyle().Foreground(p.Tag)
 
 	// Branch decorations track git's own ref colors so the badges read the way
 	// `git log --decorate` and tig do: local branches green, remote-tracking refs
@@ -221,17 +231,30 @@ func ApplyTheme(isDark bool) {
 	expandLineStyle = lipgloss.NewStyle().Background(expandBg).Foreground(hunkFg)
 	fillerStyle = lipgloss.NewStyle().Background(fillBg)
 
-	// Syntax-highlight palette tracks the same light/dark choice.
-	applyHighlightTheme(isDark)
+	// Syntax-highlight token colors are read live from pal, so there's nothing
+	// further to apply here — but callers still drop the per-line span cache
+	// (setTheme) so the new colors take on the next paint.
 }
 
-// DetectAndApplyTheme inspects the terminal background once and applies the
-// matching theme, returning whether the dark theme was chosen. Falls back to
-// dark on any detection error.
-func DetectAndApplyTheme() bool {
-	dark := lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
-	ApplyTheme(dark)
-	return dark
+// derivePulse builds a six-stop dim→bright breathing ramp from a dim neutral
+// toward the accent, for themes that don't supply their own hand-tuned stops.
+// A nil accent (the monochrome theme) yields a nil ramp — pulseShade then falls
+// back to the meta tone, so the glyph simply doesn't breathe in color.
+func derivePulse(dim, accent color.Color) []color.Color {
+	if accent == nil {
+		return nil
+	}
+	if dim == nil {
+		dim = accent
+	}
+	const stops = 6
+	ramp := make([]color.Color, stops)
+	for i := range ramp {
+		// Ease from the dim neutral (i=0) up to the full accent (i=stops-1).
+		t := float64(i) / float64(stops-1)
+		ramp[i] = blendColor(dim, accent, t)
+	}
+	return ramp
 }
 
 // statusGlyph maps a git status letter to a single-character badge.

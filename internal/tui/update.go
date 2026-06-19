@@ -117,6 +117,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
+		// Reduce-motion freezes every animation: let the loop die (it re-arms only
+		// when motion is toggled back on, guarded by m.ticking).
+		if m.reduceMotion {
+			m.ticking = false
+			return m, nil
+		}
 		// Spring the cat's position toward the cursor. A soft underdamped spring
 		// (low ω for a longer, smoother catch-up; ζ≈0.5 for a pronounced bounce) —
 		// on a jump it glides through more intermediate cells and visibly overshoots
@@ -299,6 +305,43 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.showThemePicker {
+		// The theme picker is open. j/k preview a theme live; T/tab previews the
+		// light↔dark flip; i cycles the icon tier and m toggles motion (both apply
+		// immediately); enter keeps the preview; esc reverts to the open snapshot.
+		// All exits persist the resulting preferences.
+		switch msg.String() {
+		case "esc":
+			m.setTheme(m.snapTheme, m.snapDark)
+			m.showThemePicker = false
+			m.persistPrefs()
+		case "enter":
+			m.showThemePicker = false
+			m.persistPrefs()
+		case "j", "down", "ctrl+n":
+			if m.themeSel < len(themes)-1 {
+				m.themeSel++
+			}
+			m.setTheme(m.themeSel, m.dark)
+		case "k", "up", "ctrl+p":
+			if m.themeSel > 0 {
+				m.themeSel--
+			}
+			m.setTheme(m.themeSel, m.dark)
+		case "T", "tab":
+			m.setTheme(m.themeSel, !m.dark)
+		case "i":
+			m.iconSet = (m.iconSet + 1) % iconSet(len(iconSetNames))
+		case "m":
+			m.reduceMotion = !m.reduceMotion
+			if !m.reduceMotion && !m.ticking {
+				m.ticking = true
+				return m, tickCmd(tickSlow)
+			}
+		}
+		return m, nil
+	}
+
 	key := msg.String()
 
 	// `gg` chord: a pending `g` followed by another `g` jumps to the top of
@@ -454,7 +497,12 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "t":
-		m.toggleTheme()
+		// Open the theme picker, snapshotting the current theme/variant so esc can
+		// revert a live preview.
+		m.showThemePicker = true
+		m.themeSel = m.themeIdx
+		m.snapTheme = m.themeIdx
+		m.snapDark = m.dark
 		return m, nil
 
 	// --- sidebar collapse / expand (`[` narrows toward hidden, `]` widens) ---
@@ -587,14 +635,31 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// toggleTheme flips between the dark and light palettes, rebuilding the global
-// style table. The highlight cache memoizes token colors from the active Chroma
-// style, so it's dropped here to re-lex under the new style (scroll position is
-// preserved — only the colors change).
-func (m *model) toggleTheme() {
-	m.dark = !m.dark
-	ApplyTheme(m.dark)
+// setTheme applies theme idx in the given light/dark variant, rebuilding the
+// global style table. The highlight cache memoizes token colors from the active
+// palette, so it's dropped here to re-lex under the new colors (scroll position
+// is preserved — only the colors change).
+func (m *model) setTheme(idx int, dark bool) {
+	if idx < 0 || idx >= len(themes) {
+		idx = 0
+	}
+	m.themeIdx = idx
+	m.dark = dark
+	ApplyTheme(themes[idx], dark)
 	m.hlCache = map[string][]span{}
+}
+
+// persistPrefs writes the current theme/icon/motion preferences to the config
+// file (best-effort — a write failure is silently ignored, the in-session choice
+// still stands).
+func (m model) persistPrefs() {
+	dark := m.dark
+	_ = saveConfig(userConfig{
+		Theme:        themes[m.themeIdx].Name,
+		Icons:        m.iconSet.String(),
+		ReduceMotion: m.reduceMotion,
+		Dark:         &dark,
+	})
 }
 
 func (m *model) toggleFocus() {
