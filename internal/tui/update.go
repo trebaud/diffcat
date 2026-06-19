@@ -494,6 +494,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.diffOffset = 0
 		m.diffCursor = 0
 		m.rebuildView()
+		m.clampDiffHOffset()
 		return m, nil
 
 	case "t":
@@ -550,26 +551,26 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	// --- pane focus (vim window motions) ---
+	// --- pane focus (Tab) + horizontal diff scroll (h/l) ---
 	case "tab":
 		m.toggleFocus()
 		return m, nil
 	case "h", "left":
-		// With the sidebar collapsed there's no list to focus — stay on the diff.
-		// (In the history view the sidebar is always present; focus the commit list
-		// while leaving the diff pane open.)
-		if m.sidebar != sidebarHidden {
-			m.focus = focusFiles
+		// In the history view the diff pane is closed by default; there's nothing to
+		// scroll until Tab opens it.
+		if m.mode == viewLog && !m.logDiffOpen {
+			return m, nil
 		}
+		m.scrollDiffH(-hScrollStep)
 		return m, nil
 	case "l", "right":
-		// In the history view the diff pane is closed by default; `l`/→ opens it on
-		// the right half and focuses it (Esc/h closes/leaves it).
+		// In the history view the diff pane is closed by default; Tab opens it on the
+		// right half (Esc closes it). `l` only scrolls once it's open.
 		if m.mode == viewLog && !m.logDiffOpen {
 			m.openLogDiff()
 			return m, nil
 		}
-		m.focus = focusDiff
+		m.scrollDiffH(hScrollStep)
 		return m, nil
 	case "enter", "o":
 		// Stats dashboard: open the selected contributor's detail page (kicking the

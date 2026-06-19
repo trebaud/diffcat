@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/alecthomas/chroma/v2"
 
@@ -132,8 +133,9 @@ type model struct {
 	splitRows  []diff.Row
 	splitView  bool // false = unified (GitHub inline), true = side-by-side
 	lineDigits int
-	diffOffset int
-	diffCursor int // selected row in the diff pane (index into viewLines/splitRows)
+	diffOffset  int
+	diffHOffset int // horizontal scroll offset (columns) for long code lines
+	diffCursor  int // selected row in the diff pane (index into viewLines/splitRows)
 
 	// Syntax highlighting for the selected file: a lexer chosen from its path and
 	// a per-line span cache (reset on every loadDiff so it tracks the lexer).
@@ -425,6 +427,7 @@ const expandWindow = 20
 // scroll and the diff cursor.
 func (m *model) loadDiff() {
 	m.diffOffset = 0
+	m.diffHOffset = 0
 	m.diffCursor = 0
 	m.diff = nil
 	m.fileLines = nil
@@ -621,6 +624,59 @@ func (m *model) clampDiffOffset() {
 	if m.diffOffset < 0 {
 		m.diffOffset = 0
 	}
+}
+
+// hScrollStep is how many columns h/l (and ←/→) shift the diff horizontally.
+const hScrollStep = 8
+
+// scrollDiffH shifts the diff's horizontal offset by delta columns, clamped so it
+// never scrolls past the longest visible line or left of the start.
+func (m *model) scrollDiffH(delta int) {
+	m.diffHOffset += delta
+	m.clampDiffHOffset()
+}
+
+func (m *model) clampDiffHOffset() {
+	max := m.maxDiffLineWidth() - 1 // keep at least one column of content on screen
+	if max < 0 {
+		max = 0
+	}
+	if m.diffHOffset > max {
+		m.diffHOffset = max
+	}
+	if m.diffHOffset < 0 {
+		m.diffHOffset = 0
+	}
+}
+
+// maxDiffLineWidth is the display width of the longest code line in the current
+// diff projection (tab-expanded), used to bound horizontal scrolling.
+func (m model) maxDiffLineWidth() int {
+	lineW := func(l *diff.Line) int {
+		if l == nil || l.Kind == diff.Hunk || l.Kind == diff.Meta || l.Kind == diff.Expand {
+			return 0
+		}
+		return lipgloss.Width(expandTabs(l.Text))
+	}
+	max := 0
+	if m.splitView {
+		for i := range m.splitRows {
+			r := m.splitRows[i]
+			if w := lineW(r.Left); w > max {
+				max = w
+			}
+			if w := lineW(r.Right); w > max {
+				max = w
+			}
+		}
+	} else {
+		for i := range m.viewLines {
+			if w := lineW(&m.viewLines[i]); w > max {
+				max = w
+			}
+		}
+	}
+	return max
 }
 
 func (m *model) clampDiffCursor() {

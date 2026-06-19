@@ -989,13 +989,22 @@ func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg, emphBg
 	b.WriteString(base.Render(" ")) // left padding, matching the gutter space
 	used++
 
-	ri := 0 // rune offset into the expanded text, to index the masks
+	hoff := m.diffHOffset // horizontal scroll: columns dropped off the left edge
+	vcol := 0             // display column in the (unscrolled) code body
+	ri := 0               // rune offset into the expanded text, to index the masks
 	for _, sp := range m.highlight(lexer, expanded) {
 		runes := []rune(sp.text)
 		k := 0
 		for k < len(runes) {
 			if used >= width {
 				break
+			}
+			// Skip runes scrolled off the left edge (they still advance the mask
+			// index via k, so highlight/emphasis stays aligned with what's shown).
+			if vcol < hoff {
+				vcol += lipgloss.Width(string(runes[k]))
+				k++
+				continue
 			}
 			// Group the longest run of runes that share both an emphasis and a
 			// search state so each span is rendered with a single background.
@@ -1024,6 +1033,7 @@ func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg, emphBg
 			if segW <= remaining {
 				b.WriteString(st.Render(seg))
 				used += segW
+				vcol += segW
 				k = j
 				continue
 			}
@@ -1032,6 +1042,7 @@ func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg, emphBg
 			b.WriteString(st.Render(cut))
 			b.WriteString(base.Render("…"))
 			used += lipgloss.Width(cut) + 1
+			vcol += lipgloss.Width(cut) + 1
 			ri = -1 // sentinel: done
 			break
 		}
@@ -1252,7 +1263,7 @@ func (m model) footerView() string {
 		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewLog:
 		if m.logDiffOpen {
-			keys = []string{"j/k select", "h/l ⇄ pane", "Tab hide diff", "↵ open commit"}
+			keys = []string{"j/k select", "h/l scroll", "Tab hide diff", "↵ open commit"}
 		} else {
 			keys = []string{"j/k select", "Tab diff", "↵ open commit"}
 		}
@@ -1262,11 +1273,11 @@ func (m model) footerView() string {
 		keys = append(keys, "d details", "S stats", "t theme", "? help", "q quit")
 	case viewCommit:
 		keys = []string{
-			"j/k move", "h/l ⇄ pane", "↵ open", "f find", "/ search", "d details", "[ ] sidebar", "s split", "t theme", "esc back", "? help", "q quit",
+			"j/k move", "Tab ⇄ pane", "h/l scroll", "f find", "/ search", "d details", "[ ] sidebar", "s split", "t theme", "esc back", "? help", "q quit",
 		}
 	default:
 		keys = []string{
-			"j/k move", "h/l ⇄ pane", "↵ open/expand", "f find", "/ search", "[ ] sidebar", "s split", "t theme", "L history", "? help", "q quit",
+			"j/k move", "Tab ⇄ pane", "h/l scroll", "↵ open/expand", "f find", "/ search", "[ ] sidebar", "s split", "t theme", "L history", "? help", "q quit",
 		}
 	}
 	footer := mutedStyle.Render(strings.Join(keys, "  ·  "))
@@ -1289,8 +1300,8 @@ func (m model) helpBox() string {
 		titleStyle.Render("diffcat — vim keybindings"),
 		"",
 		headingStyle.Render("  panes"),
-		"  h / l        focus file list / diff pane",
-		"  Tab          toggle focused pane",
+		"  Tab          switch focus between file list / diff pane",
+		"  h / l        scroll the diff left / right (for long lines)",
 		"  Enter / o    open file's diff / expand context",
 		"  f            fuzzy-jump to a changed file by name",
 		"  [ / ]        collapse / widen the sidebar (full-width diff ↔ wide list)",
