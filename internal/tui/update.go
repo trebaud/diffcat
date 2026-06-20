@@ -896,20 +896,7 @@ func (m *model) refresh() {
 	}
 
 	if m.mode == viewLog {
-		wasWorking := m.onWorkingRow()
-		prevSHA := ""
-		if c := m.selectedCommit(); c != nil {
-			prevSHA = c.SHA
-		}
-		m.loadCommits()
-		m.refreshWorkingCount()
-		// Keep the reader on the working-tree row across a sync when it's still
-		// present; otherwise re-find the same commit by SHA.
-		if wasWorking && m.logWorking {
-			m.commitCursor = 0
-		} else {
-			m.reselectCommit(prevSHA)
-		}
+		m.reloadCommitList()
 		m.preserveDiffView(m.loadCommitDiff)
 		return
 	}

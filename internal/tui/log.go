@@ -198,6 +198,10 @@ func (m *model) exitCommit() {
 	m.branchRows = nil
 	m.mode = viewLog
 	m.focus = focusFiles
+	// A commit can land while drilled in (refresh skips the list reload for
+	// viewCommit, having only advanced the sync fingerprint), so reload the list on
+	// the way back rather than waiting for an unrelated change to move it again.
+	m.reloadCommitList()
 	// Re-preview only when the diff pane is open; closed, the list is full-screen.
 	if m.logDiffOpen {
 		m.loadCommitDiff()
@@ -221,6 +225,30 @@ func (m *model) loadCommits() {
 		m.baseStart = -1
 	}
 	m.commitDiffCache = map[string][]diff.Line{}
+}
+
+// reloadCommitList re-reads the history list, holding the selected commit by SHA
+// (and the working-tree row when it's still present). It is the list-only half of
+// a refresh, shared by refresh's viewLog branch and by the returns-to-log exits
+// (exitOverview, exitCommit). Those exits leave a mode where the background sync
+// already advanced syncFingerprint but refresh deliberately skipped the list
+// reload — so without reloading here, a commit made while that mode covered the
+// list would never appear, since later polls see no fingerprint change to act on.
+func (m *model) reloadCommitList() {
+	wasWorking := m.onWorkingRow()
+	prevSHA := ""
+	if c := m.selectedCommit(); c != nil {
+		prevSHA = c.SHA
+	}
+	m.loadCommits()
+	m.refreshWorkingCount()
+	// Keep the reader on the working-tree row when it's still present; otherwise
+	// re-find the same commit by SHA across any newer commits added on top.
+	if wasWorking && m.logWorking {
+		m.commitCursor = 0
+	} else {
+		m.reselectCommit(prevSHA)
+	}
 }
 
 // moveCommitCursor moves the history selection and previews the new commit's

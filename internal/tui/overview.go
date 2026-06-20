@@ -30,6 +30,11 @@ func (m *model) enterOverview() tea.Cmd {
 func (m *model) exitOverview() {
 	m.mode = viewLog
 	m.focus = focusFiles
+	// A commit can land while the dashboard covers the list (refresh skips the list
+	// reload for viewOverview, having only advanced the sync fingerprint), so reload
+	// it now rather than waiting for an unrelated change to move the fingerprint
+	// again — otherwise the new commit silently never appears in the history.
+	m.reloadCommitList()
 	m.loadCommitDiff()
 }
 
