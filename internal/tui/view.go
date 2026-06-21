@@ -44,22 +44,45 @@ func (m model) render() string {
 	}
 
 	// The overview dashboard and a contributor's detail page are single full-width
-	// panes, not the two-pane split.
-	if m.mode == viewOverview {
-		screen := m.overviewView()
-		if m.showHelp {
-			return m.floatOverlay(screen, m.helpBox())
-		}
-		return screen
-	}
-	if m.mode == viewAuthorDetail {
-		screen := m.authorDetailView()
-		if m.showHelp {
-			return m.floatOverlay(screen, m.helpBox())
-		}
-		return screen
+	// panes, not the two-pane split; everything else is the header/body/footer
+	// split built by twoPaneScreen.
+	var screen string
+	switch m.mode {
+	case viewOverview:
+		screen = m.overviewView()
+	case viewAuthorDetail:
+		screen = m.authorDetailView()
+	default:
+		screen = m.twoPaneScreen()
 	}
 
+	// Overlays float above the dimmed screen rather than replacing it, so the
+	// reader keeps their place in the background. The startup splash and the
+	// branch-cleared celebration sit on top of everything else.
+	switch {
+	case m.showSplash:
+		return m.floatOverlay(screen, m.splashBox())
+	case m.celebrate > 0:
+		return m.floatOverlay(screen, m.celebrationBox())
+	case m.showHelp:
+		return m.floatOverlay(screen, m.helpBox())
+	case m.showCommitDetails:
+		return m.floatOverlay(screen, m.commitDetailsBox())
+	case m.fileFindActive:
+		return m.floatOverlay(screen, m.fileFindBox())
+	case m.showThemePicker:
+		return m.floatOverlay(screen, m.themePickerBox())
+	case m.showPalette:
+		return m.floatOverlay(screen, m.paletteBox())
+	case m.showGlobalSearch:
+		return m.floatOverlay(screen, m.globalSearchBox())
+	}
+	return screen
+}
+
+// twoPaneScreen builds the standard header/body/footer screen for the file-tree
+// and history views: the file list (or commit list) beside the diff pane.
+func (m model) twoPaneScreen() string {
 	// The sidebar width is driven by the `[`/`]` collapse-expand state. When it's
 	// 0 the sidebar is collapsed and the diff fills the whole width; otherwise the
 	// diff takes the remainder past the list and the one-column divider.
@@ -107,23 +130,7 @@ func (m model) render() string {
 	// The chrome rows span the full width: truncate (never wrap) then pad.
 	header := padLine(m.headerView(), m.width)
 	footer := padLine(m.footerView(), m.width)
-	screen := strings.Join([]string{header, body, footer}, "\n")
-
-	// Overlays float above the dimmed screen rather than replacing it, so the
-	// reader keeps their place in the background.
-	if m.showHelp {
-		return m.floatOverlay(screen, m.helpBox())
-	}
-	if m.showCommitDetails {
-		return m.floatOverlay(screen, m.commitDetailsBox())
-	}
-	if m.fileFindActive {
-		return m.floatOverlay(screen, m.fileFindBox())
-	}
-	if m.showThemePicker {
-		return m.floatOverlay(screen, m.themePickerBox())
-	}
-	return screen
+	return strings.Join([]string{header, body, footer}, "\n")
 }
 
 // floatOverlay composites box as a floating window centered over screen: the
@@ -195,12 +202,33 @@ func blendColor(a, b color.Color, t float64) color.Color {
 	return color.RGBA{R: mix(ar, br), G: mix(ag, bg), B: mix(ab, bb), A: 0xff}
 }
 
+// headerReview is the always-on review-progress badge appended to the header in
+// the views that have a review hook: "reviewed 3/12 ███░░░░░░░ 25%", the filled
+// run in green over a faint track. Empty when the view has nothing to review, so
+// callers can append it unconditionally.
+func (m model) headerReview() string {
+	done, total := m.reviewProgress()
+	if total == 0 {
+		return ""
+	}
+	const w = 10
+	filled := 0
+	if done >= total {
+		filled = w
+	} else {
+		filled = done * w / total
+	}
+	bar := addedStyle.Render(strings.Repeat("█", filled)) + borderStyle.Render(strings.Repeat("░", w-filled))
+	return mutedStyle.Render(fmt.Sprintf("  reviewed %d/%d ", done, total)) + bar +
+		mutedStyle.Render(fmt.Sprintf(" %d%%", done*100/total))
+}
+
 func (m model) headerView() string {
 	left := titleStyle.Render("diffcat")
 	if m.mode == viewLog {
 		mid := mutedStyle.Render(fmt.Sprintf("  %s · history", branchLabel(m.branch)))
 		count := "  " + headingStyle.Render(fmt.Sprintf("%d commits", m.featureCommitCount()))
-		return left + mid + count
+		return left + mid + count + m.headerReview()
 	}
 	if m.mode == viewOverview {
 		mid := mutedStyle.Render(fmt.Sprintf("  %s · stats", branchLabel(m.branch)))
@@ -245,7 +273,9 @@ func (m model) headerView() string {
 	if m.shortstat != "" {
 		stat = "  " + headingStyle.Render(m.shortstat)
 	}
-	return left + mid + stat
+	// The review-progress badge comes before the shortstat so it survives the
+	// width truncation — clearing the diff is the headline signal here.
+	return left + mid + m.headerReview() + stat
 }
 
 // padLine truncates a single styled line to width (without wrapping) and pads
@@ -419,6 +449,11 @@ func (m model) commitRow(c git.Commit, selected bool, width int) string {
 	if c.IsMerge() {
 		glyph = "◆"
 	}
+	// A reviewed commit wears a check in place of its node glyph (same single
+	// cell), matching the file tree's reviewed cue.
+	if m.reviewed[c.SHA] {
+		glyph = "✓"
+	}
 	if m.sidebar == sidebarWide || m.mode == viewLog {
 		return m.commitRowWide(c, glyph, selected, width)
 	}
@@ -482,6 +517,10 @@ func (m model) commitRowWide(c git.Commit, glyph string, selected bool, width in
 	if c.IsMerge() {
 		glyphStyle = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
 	}
+	reviewed := m.reviewed[c.SHA]
+	if reviewed {
+		glyphStyle = addedStyle // a green check
+	}
 	var b strings.Builder
 	b.WriteString(glyphStyle.Render(glyph))
 	b.WriteString(" ")
@@ -491,7 +530,11 @@ func (m model) commitRowWide(c git.Commit, glyph string, selected bool, width in
 		b.WriteString(refsStyled)
 		b.WriteString("  ")
 	}
-	b.WriteString(subj)
+	if reviewed {
+		b.WriteString(mutedStyle.Render(subj)) // cleared — recede
+	} else {
+		b.WriteString(subj)
+	}
 	b.WriteString(strings.Repeat(" ", gap))
 	if meta != "" {
 		b.WriteString(mutedStyle.Render(meta))
@@ -541,6 +584,14 @@ func (m model) treeRow(r treeRow, selected bool, width int) string {
 		if !r.collapsed {
 			glyph = "▾"
 		}
+	}
+
+	// A reviewed file wears a check in place of its status glyph (same single
+	// cell, so the layout is unchanged) and dims, so cleared files recede and the
+	// eye falls on what's left to read.
+	reviewed := !r.isDir && m.reviewed[r.path]
+	if reviewed {
+		glyph = "✓"
 	}
 
 	// Folder names carry a trailing slash so a name collision with a file reads
@@ -601,13 +652,20 @@ func (m model) treeRow(r treeRow, selected bool, width int) string {
 		nameStyled = dirStyle.Render(name)
 		glyphStyled = dirStyle.Render(glyph)
 	}
+	// A reviewed file recedes: a green check and a dimmed name. It also opts out of
+	// the unseen pulse/shimmer below — once you've cleared a file, it should sit
+	// quietly even if a later sync touches it again.
+	if reviewed {
+		glyphStyled = addedStyle.Render(glyph)
+		nameStyled = mutedStyle.Render(name)
+	}
 	// A file a sync changed (and the reader hasn't opened) gently breathes its
 	// status glyph through the pulse ramp — a quiet dim→bright→dim ease, not a
 	// blink. The pulse persists until its diff is opened (loadDiff clears the flag).
 	// On top of that, the instant a change lands a bright highlight sweeps once
 	// across the name — a clear "this just changed" cue that then clears itself,
 	// leaving the quieter glyph pulse to carry on.
-	if !r.isDir && m.unseen[r.path] && !m.reduceMotion {
+	if !r.isDir && !reviewed && m.unseen[r.path] && !m.reduceMotion {
 		glyphStyled = lipgloss.NewStyle().Foreground(pulseShade(m.animFrame)).Bold(true).Render(glyph)
 		if swept, live := shimmerName(name, m.animFrame-m.unseenAt[r.path]); live {
 			nameStyled = swept
@@ -615,7 +673,7 @@ func (m model) treeRow(r treeRow, selected bool, width int) string {
 	}
 
 	stats := mutedStyle.Render(statsPlain)
-	if !r.isDir && !r.binary && statsPlain != "" {
+	if !r.isDir && !r.binary && !reviewed && statsPlain != "" {
 		stats = addedStyle.Render(fmt.Sprintf("+%d", r.added)) + " " +
 			removedStyle.Render(fmt.Sprintf("-%d", r.deleted))
 	}
@@ -748,15 +806,17 @@ func (m model) tooSmallView() string {
 
 func (m model) diffView(width int) string {
 	rows := m.diffViewportHeight()
+	cw := width - m.minimapW(width)
 	f := m.selectedFile()
 
 	// Heading + body depend on what's under the cursor: a file shows its diff, a
-	// folder shows a roll-up, and an empty tree shows a hint.
+	// folder shows a roll-up, and an empty tree shows a hint. Body lines are laid
+	// out at the content width so the minimap column has room on the right.
 	if f != nil {
-		title := truncatePath(f.Path, width-2-lipgloss.Width(m.splitTag())) + m.splitTag()
-		return m.diffPane(width, title, m.diffWindow(width, rows))
+		title := truncatePath(f.Path, cw-2-lipgloss.Width(m.splitTag())) + m.splitTag()
+		return m.diffPane(width, title, m.diffWindow(cw, rows))
 	}
-	title, body := m.noFileSelection(width)
+	title, body := m.noFileSelection(cw)
 	return m.diffPane(width, title, []string{body})
 }
 
@@ -764,16 +824,17 @@ func (m model) diffView(width int) string {
 // commit's combined diff, headed by its short SHA and subject.
 func (m model) commitDiffView(width int) string {
 	rows := m.diffViewportHeight()
+	cw := width - m.minimapW(width)
 	if m.onWorkingRow() {
-		title := truncateText("working tree · uncommitted changes", width-2-lipgloss.Width(m.splitTag())) + m.splitTag()
-		return m.diffPane(width, title, m.diffWindow(width, rows))
+		title := truncateText("working tree · uncommitted changes", cw-2-lipgloss.Width(m.splitTag())) + m.splitTag()
+		return m.diffPane(width, title, m.diffWindow(cw, rows))
 	}
 	c := m.selectedCommit()
 	if c == nil {
 		return m.diffPane(width, "commit", []string{mutedStyle.Render("  No commit selected.")})
 	}
-	title := truncateText(c.Short+"  "+c.Subject, width-2-lipgloss.Width(m.splitTag())) + m.splitTag()
-	return m.diffPane(width, title, m.diffWindow(width, rows))
+	title := truncateText(c.Short+"  "+c.Subject, cw-2-lipgloss.Width(m.splitTag())) + m.splitTag()
+	return m.diffPane(width, title, m.diffWindow(cw, rows))
 }
 
 // splitTag is the " [split]" badge appended to a diff-pane title in split mode.
@@ -785,18 +846,32 @@ func (m model) splitTag() string {
 }
 
 // diffPane lays out the right pane: a focus-aware heading, the body lines, blank
-// padding so the pane fills its height, and the nyan progress bar pinned to the
-// bottom. Shared by the file diff and the commit diff.
+// padding so the pane fills its height, the right-edge minimap, and the nyan
+// progress bar pinned to the bottom. The body lines are produced at the content
+// width (pane width minus the minimap column); diffPane pads each to that width
+// and appends the matching minimap cell so the strip stays flush right. Shared by
+// the file diff and the commit diff.
 func (m model) diffPane(width int, title string, lines []string) string {
 	rows := m.diffViewportHeight()
+	mmW := m.minimapW(width)
+	contentW := width - mmW
+	var minimap []string
+	if mmW > 0 {
+		minimap = m.minimapColumn(rows)
+	}
+
 	var b strings.Builder
 	b.WriteString(m.paneHeading(title, focusDiff))
 	b.WriteString("\n")
-	for _, l := range lines {
-		b.WriteString(l)
-		b.WriteString("\n")
-	}
-	for shown := len(lines); shown < rows; shown++ {
+	for i := 0; i < rows; i++ {
+		line := ""
+		if i < len(lines) {
+			line = lines[i]
+		}
+		b.WriteString(padLine(line, contentW))
+		if mmW > 0 {
+			b.WriteString(minimap[i])
+		}
 		b.WriteString("\n")
 	}
 	b.WriteString(m.nyanProgress(width))
@@ -810,6 +885,12 @@ func (m model) noFileSelection(width int) (title, body string) {
 	if r != nil && r.isDir {
 		title = truncatePath(r.path+"/", width-2)
 		return title, mutedStyle.Render(fmt.Sprintf("  folder — +%d -%d across its files", r.added, r.deleted))
+	}
+	// An empty change list (working tree clean against the base) gets a friendly
+	// resting state rather than a bare hint.
+	if len(m.files) == 0 {
+		cat := catStyle.Render("=^.^=")
+		return "diff", "  " + cat + mutedStyle.Render("  nothing to review — working tree clean")
 	}
 	return "diff", mutedStyle.Render("  Select a file to view its diff.")
 }
@@ -1187,28 +1268,11 @@ func nyanBar(width int, frac float64, frame, settle int) string {
 	// the spring gliding the cat cell-by-cell on jumps, not from sub-cell rendering.
 	catX := int(frac*float64(maxX) + 0.5)
 
-	// Perceptually-even rainbow: constant OKLCH L=0.72 C=0.155, hue rotating, so
-	// every band has identical perceived brightness (raw ANSI indices banded
-	// unevenly and went dull on muted terminal themes). Degrades to the nearest
-	// ANSI on 16-color terminals.
-	trail := []color.Color{
-		lipgloss.Color("#f67972"), lipgloss.Color("#e19005"),
-		lipgloss.Color("#5ebd64"), lipgloss.Color("#00c1c2"),
-		lipgloss.Color("#69a3ff"), lipgloss.Color("#d480da"),
-	}
-	n := len(trail)
-
 	var b strings.Builder
-	// Rainbow trail behind the cat, in 2-char blocks that shimmer per frame.
-	for blk := 0; blk*2 < catX; blk++ {
-		start := blk * 2
-		segEnd := start + 2
-		if segEnd > catX {
-			segEnd = catX
-		}
-		s := lipgloss.NewStyle().Foreground(trail[(blk+frame)%n])
-		b.WriteString(s.Render(strings.Repeat("━", segEnd-start)))
-	}
+	// Perceptually-even rainbow trail behind the cat (shared rainbowPalette), in
+	// 2-char blocks that shimmer per frame. Degrades to the nearest ANSI on
+	// 16-color terminals.
+	b.WriteString(rainbowBar(catX, frame))
 	b.WriteString(catStyle.Render(cat)) // brand-magenta cat (kept off the selection blue)
 	// Faint track ahead of the cat shows how far is left.
 	if right := width - catX - catW; right > 0 {
@@ -1249,6 +1313,11 @@ func (m model) footerView() string {
 	if m.searchActive {
 		return selectedStyle.Render("/") + m.searchInput + selectedStyle.Render("▌")
 	}
+	// On the very first run a one-time hint briefly takes over the footer, pointing
+	// at help and global search, then fades.
+	if m.showToast {
+		return m.toastText()
+	}
 	var keys []string
 	switch m.mode {
 	case viewOverview:
@@ -1270,14 +1339,14 @@ func (m model) footerView() string {
 		if !m.onBaseBranch() {
 			keys = append(keys, "D "+m.branchDiffLabel())
 		}
-		keys = append(keys, "d details", "S stats", "t theme", "? help", "q quit")
+		keys = append(keys, "x review", "d details", "S stats", "t theme", "⌕ ctrl+k search", "? help", "q quit")
 	case viewCommit:
 		keys = []string{
-			"j/k move", "Tab ⇄ pane", "h/l scroll", "f find", "/ search", "d details", "[ ] sidebar", "s split", "t theme", "esc back", "? help", "q quit",
+			"j/k move", "Tab ⇄ pane", "h/l scroll", "f find", "/ search", "x review", "[ ] sidebar", "s split", "t theme", "⌕ ctrl+k search", "esc back", "? help", "q quit",
 		}
 	default:
 		keys = []string{
-			"j/k move", "Tab ⇄ pane", "h/l scroll", "↵ open/expand", "f find", "/ search", "[ ] sidebar", "s split", "t theme", "L history", "? help", "q quit",
+			"j/k move", "Tab ⇄ pane", "h/l scroll", "↵ open/expand", "f find", "/ search", "x review", "[ ] sidebar", "s split", "t theme", "⌕ ctrl+k search", "L history", "? help", "q quit",
 		}
 	}
 	footer := mutedStyle.Render(strings.Join(keys, "  ·  "))
@@ -1335,6 +1404,11 @@ func (m model) helpBox() string {
 		lines = append(lines, "  D            aggregated "+label+" (file tree + diff)")
 	}
 	lines = append(lines,
+		"",
+		headingStyle.Render("  review & commands"),
+		"  x            mark the file / commit under the cursor reviewed",
+		"  ctrl+k       global search — commits · files · code",
+		"  :            command palette — fuzzy-run any action",
 		"",
 		headingStyle.Render("  view"),
 		"  s            toggle unified / side-by-side",

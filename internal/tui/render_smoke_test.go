@@ -277,7 +277,43 @@ func TestRenderNoWrap(t *testing.T) {
 	openLog := logSampleModel()
 	openLog.logDiffOpen = true
 	openLog.focus = focusDiff
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, detailAI, detailHuman, detailNoMods, detailLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog} {
+	// Review-progress hook: a branch view with some files reviewed (header bar +
+	// dimmed/checked rows), a history view with a reviewed commit, an empty change
+	// list (clean-tree resting state), and the branch-cleared celebration.
+	reviewedBranch := sampleModel()
+	reviewedBranch.reviewed = map[string]bool{"internal/tui/view.go": true, "old.txt": true}
+	reviewedLog := logSampleModel()
+	reviewedLog.reviewed = map[string]bool{"aaa111full": true}
+	cleanTree := sampleModel()
+	cleanTree.files, cleanTree.rows = nil, nil
+	celebrating := sampleModel()
+	celebrating.reviewed = map[string]bool{}
+	for _, f := range celebrating.files {
+		celebrating.reviewed[f.Path] = true
+	}
+	celebrating.celebrate = 10
+	celebrating.animFrame = 4
+	// The command palette, the startup splash, and the first-run footer hint.
+	palette := sampleModel()
+	palette.showPalette = true
+	palette.paletteInput = "rev"
+	// Global search: a query with hits across all three categories. The corpora are
+	// seeded directly so the render exercises grouped results (including a code line
+	// far wider than a narrow pane) without shelling out to git.
+	gsearch := logSampleModel()
+	gsearch.showGlobalSearch = true
+	gsearch.gsInput = "e"
+	gsearch.gsFiles = gsearch.files
+	gsearch.gsCode = []gsCodeLine{
+		{path: "internal/tui/view.go", text: "func render() string { return everythingHere(width, height) }"},
+		{path: "very/deep/nested/path/that/should/truncate/handler.go", text: "  e := handleEverything(request, response, context, deadline)"},
+	}
+	splash := sampleModel()
+	splash.showSplash = true
+	splash.animFrame = 3
+	toast := sampleModel()
+	toast.showToast = true
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, detailAI, detailHuman, detailNoMods, detailLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog, reviewedBranch, reviewedLog, cleanTree, celebrating, palette, gsearch, splash, toast} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -312,7 +348,11 @@ func TestFullScreenFill(t *testing.T) {
 	wideLog.commits[0].Tags = []string{"v1.2.0"}
 	openLog := logSampleModel()
 	openLog.logDiffOpen = true
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, commitSampleModel(), overview, overviewLoading, detailAI, detailHuman, hiddenSidebar, wideLog} {
+	// A branch view with reviewed files, focused on the diff so the minimap and the
+	// reviewed row styling are both exercised at exact fill.
+	reviewedFill := sampleModel()
+	reviewedFill.reviewed = map[string]bool{"internal/tui/view.go": true}
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, commitSampleModel(), overview, overviewLoading, detailAI, detailHuman, hiddenSidebar, wideLog, reviewedFill} {
 		m.focus = focusDiff
 		for _, split := range []bool{false, true} {
 			m.splitView = split
@@ -343,7 +383,22 @@ func TestOverlayFloats(t *testing.T) {
 	details.commits[0].Body = "A body paragraph that explains the change in enough words to span a couple of lines inside the floating window."
 	details.showCommitDetails = true
 
-	for _, m := range []model{help, details} {
+	palette := sampleModel()
+	palette.showPalette = true
+	palette.paletteInput = "th"
+
+	splash := sampleModel()
+	splash.showSplash = true
+	splash.animFrame = 2
+
+	celebrating := sampleModel()
+	celebrating.reviewed = map[string]bool{}
+	for _, f := range celebrating.files {
+		celebrating.reviewed[f.Path] = true
+	}
+	celebrating.celebrate = 12
+
+	for _, m := range []model{help, details, palette, splash, celebrating} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 24}, {80, 20}, {60, 14}} {
 			m.width, m.height = sz[0], sz[1]
 			out := m.render()
@@ -535,6 +590,50 @@ func TestLogWorkingTreeRow(t *testing.T) {
 	}
 	if c := m.selectedCommit(); c == nil || c.Short != "ccc3333" {
 		t.Errorf("last row should be the last commit, got %+v", c)
+	}
+}
+
+// TestPlayfulOverlaysMonochrome renders the celebration (under reduce-motion, the
+// static fallback) and the command palette with the no-color Monochrome theme
+// applied, guarding that the playful additions degrade cleanly: no panic, exact
+// height, and no overflow. The theme is restored afterward so other tests keep
+// the default palette.
+func TestPlayfulOverlaysMonochrome(t *testing.T) {
+	idx := themeIndexByName("Monochrome")
+	if idx < 0 {
+		t.Skip("no Monochrome theme registered")
+	}
+	ApplyTheme(themes[idx], true)
+	defer ApplyTheme(themeGitHub, true)
+
+	celebrating := sampleModel()
+	celebrating.reviewed = map[string]bool{}
+	for _, f := range celebrating.files {
+		celebrating.reviewed[f.Path] = true
+	}
+	celebrating.celebrate = 12
+	celebrating.reduceMotion = true // the static, no-animation celebration card
+
+	palette := sampleModel()
+	palette.showPalette = true
+	palette.paletteInput = "next"
+
+	cleanTree := sampleModel()
+	cleanTree.files, cleanTree.rows = nil, nil // the clean-tree resting state
+
+	for _, m := range []model{celebrating, palette, cleanTree} {
+		for _, sz := range [][2]int{{120, 40}, {80, 24}, {60, 12}} {
+			m.width, m.height = sz[0], sz[1]
+			lines := strings.Split(m.render(), "\n")
+			if len(lines) != sz[1] {
+				t.Errorf("%dx%d: %d lines, want %d", sz[0], sz[1], len(lines), sz[1])
+			}
+			for i, line := range lines {
+				if w := lipgloss.Width(line); w > sz[0] {
+					t.Errorf("%dx%d line %d width %d exceeds %d", sz[0], sz[1], i, w, sz[0])
+				}
+			}
+		}
 	}
 }
 

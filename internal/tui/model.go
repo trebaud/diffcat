@@ -125,14 +125,14 @@ type model struct {
 	// stays pristine; viewLines is the derived display list — pristine lines
 	// interleaved with revealed context and expand affordances — and splitRows is
 	// its side-by-side projection. lineDigits sizes the line-number gutter.
-	diff       []diff.Line
-	fileLines  []string
-	gaps       []diff.Gap
-	revealed   map[int][2]int
-	viewLines  []diff.Line
-	splitRows  []diff.Row
-	splitView  bool // false = unified (GitHub inline), true = side-by-side
-	lineDigits int
+	diff        []diff.Line
+	fileLines   []string
+	gaps        []diff.Gap
+	revealed    map[int][2]int
+	viewLines   []diff.Line
+	splitRows   []diff.Row
+	splitView   bool // false = unified (GitHub inline), true = side-by-side
+	lineDigits  int
 	diffOffset  int
 	diffHOffset int // horizontal scroll offset (columns) for long code lines
 	diffCursor  int // selected row in the diff pane (index into viewLines/splitRows)
@@ -203,6 +203,47 @@ type model struct {
 	syncFingerprint string
 
 	showHelp bool
+
+	// reviewed marks which items the reader has cleared: file paths in the branch /
+	// commit views, commit SHAs in the history view. `x` toggles the item under the
+	// cursor; the header shows a progress bar and clearing the last one fires the
+	// celebration. Persisted per-repo (state.go), keyed by the base..HEAD signature
+	// so the marks expire when the diff they describe moves on.
+	reviewed map[string]bool
+
+	// celebrate counts down the frames of the "branch cleared" celebration, fired
+	// once when the last reviewable item is marked. celebrated latches that fire so
+	// it doesn't replay until something is unmarked and re-cleared.
+	celebrate  int
+	celebrated bool
+
+	// Command palette (`:`). showPalette gates the floating action picker;
+	// paletteInput is the fuzzy query and paletteSel the highlighted action.
+	showPalette  bool
+	paletteInput string
+	paletteSel   int
+
+	// Global search (ctrl+k). showGlobalSearch gates the overlay; gsInput is the
+	// query and gsSel the highlighted hit (index into the flat result list).
+	// gsFiles / gsCode are the session-cached search corpora (branch-vs-base
+	// changed files and the flat index of their changed lines), built lazily on
+	// first search and dropped by refresh so they track the working tree.
+	showGlobalSearch bool
+	gsInput          string
+	gsSel            int
+	gsFiles          []git.FileChange
+	gsCode           []gsCodeLine
+
+	// Onboarding. showSplash gates the startup nyan-streak splash (skipped under
+	// reduceMotion); splashEnd is the animFrame it auto-dismisses at. showToast
+	// gates the one-time first-run footer hint; toastStart is the animFrame it
+	// appeared (it fades out a few seconds later). firstRunDone mirrors the
+	// persisted flag so the hint shows exactly once, ever.
+	showSplash   bool
+	splashEnd    int
+	showToast    bool
+	toastStart   int
+	firstRunDone bool
 
 	// showCommitDetails toggles the commit-details modal (author, date, full
 	// message body) for the in-scope commit; detailsScroll windows a long body.
@@ -288,7 +329,32 @@ func newModel(repo, base, baseName string, baseIsDefault bool, branch string, fi
 
 		authorModules:          map[string][]git.ModuleCount{},
 		authorModulesComputing: map[string]bool{},
+
+		reviewed: map[string]bool{},
 	}
+
+	// Restore review progress and onboarding state. The startup splash and the
+	// one-time first-run hint are the playful touches; both bow out under
+	// reduce-motion (no tick to drive or auto-dismiss them).
+	st := loadState()
+	m.firstRunDone = st.FirstRunDone
+	if sc, ok := st.Reviews[repo]; ok && sc.Key == m.reviewKey() {
+		for id, done := range sc.Items {
+			if done {
+				m.reviewed[id] = true
+			}
+		}
+	}
+	if !r.reduceMotion {
+		m.showSplash = true
+		m.splashEnd = splashFrames
+		if !m.firstRunDone {
+			m.showToast = true
+			markFirstRunDone(repo)
+			m.firstRunDone = true
+		}
+	}
+
 	m.rebuildTree()
 	m.loadDiff()
 	// diffcat always opens on the branch's commit history — the timeline of what

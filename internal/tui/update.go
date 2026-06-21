@@ -160,6 +160,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.animFrame++
 			m.animAccum -= tickSlow
 		}
+		// Retire the onboarding flourishes on their own timers, and wind down the
+		// celebration a frame at a time.
+		if m.showSplash && m.animFrame >= m.splashEnd {
+			m.showSplash = false
+		}
+		if m.showToast && m.animFrame-m.toastStart >= toastFrames {
+			m.showToast = false
+		}
+		if m.celebrate > 0 {
+			m.celebrate--
+		}
 		return m, tickCmd(interval)
 
 	case historyMsg:
@@ -212,6 +223,91 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// The startup splash and the branch-cleared celebration are dismissed by any
+	// key (they also bow out on their own timer).
+	if m.showSplash {
+		m.showSplash = false
+		return m, nil
+	}
+	if m.celebrate > 0 {
+		m.celebrate = 0
+		return m, nil
+	}
+	// Once the reader touches a key, retire the first-run hint (it also auto-fades);
+	// the keypress itself still goes on to act.
+	m.showToast = false
+
+	if m.showGlobalSearch {
+		// Global search is open. Enter navigates to the highlighted hit; esc (or
+		// ctrl+k again) closes; arrows / ctrl+n/p move; the rest edits the query.
+		results := m.gsResults()
+		switch msg.String() {
+		case "esc", "ctrl+k":
+			m.showGlobalSearch = false
+		case "enter":
+			m.showGlobalSearch = false
+			if m.gsSel >= 0 && m.gsSel < len(results) {
+				return m, m.gsActivate(results[m.gsSel])
+			}
+		case "down", "ctrl+n":
+			if m.gsSel < len(results)-1 {
+				m.gsSel++
+			}
+		case "up", "ctrl+p":
+			if m.gsSel > 0 {
+				m.gsSel--
+			}
+		case "backspace":
+			if r := []rune(m.gsInput); len(r) > 0 {
+				m.gsInput = string(r[:len(r)-1])
+			}
+			m.gsSel = 0
+		default:
+			// msg.Text carries the actual typed characters (a space arrives as the key
+			// name "space", so a String()-length check would drop it); it's empty for
+			// non-text keys like the arrows, which the cases above already handle.
+			if msg.Text != "" {
+				m.gsInput += msg.Text
+				m.gsSel = 0
+			}
+		}
+		return m, nil
+	}
+
+	if m.showPalette {
+		// The command palette is open. Enter runs the highlighted action; esc (or
+		// `:` again) closes; arrows / ctrl+n/p move; the rest edits the query.
+		actions := m.paletteMatches()
+		switch msg.String() {
+		case "esc", ":":
+			m.showPalette = false
+		case "enter":
+			m.showPalette = false
+			if m.paletteSel >= 0 && m.paletteSel < len(actions) {
+				return m, actions[m.paletteSel].action.do(&m)
+			}
+		case "down", "ctrl+n":
+			if m.paletteSel < len(actions)-1 {
+				m.paletteSel++
+			}
+		case "up", "ctrl+p":
+			if m.paletteSel > 0 {
+				m.paletteSel--
+			}
+		case "backspace":
+			if r := []rune(m.paletteInput); len(r) > 0 {
+				m.paletteInput = string(r[:len(r)-1])
+			}
+			m.paletteSel = 0
+		default:
+			if s := msg.String(); len([]rune(s)) == 1 {
+				m.paletteInput += s
+				m.paletteSel = 0
+			}
+		}
+		return m, nil
+	}
+
 	if m.showHelp {
 		// Any key dismisses the help overlay.
 		m.showHelp = false
@@ -382,65 +478,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "L":
-		// Return to the commit-history view (the default). From a per-commit tree,
-		// step back to the history list rather than reloading from scratch. A
-		// contributor's detail page normalizes through the ranking it sits above.
-		if m.mode == viewAuthorDetail {
-			m.exitAuthorDetail()
-		}
-		switch m.mode {
-		case viewLog:
-			// already in history
-		case viewCommit:
-			m.exitCommit()
-		case viewOverview:
-			// Leave the overview to its origin first, then step that to history —
-			// so a commit overview's stashed branch tree is restored properly.
-			m.exitOverview()
-			if m.mode == viewCommit {
-				m.exitCommit()
-			} else if m.mode != viewLog {
-				m.enterLog()
-			}
-		default:
-			m.enterLog()
-		}
-		return m, nil
+		return m, m.goHistory()
 
 	case "D":
-		// Open the aggregated branch-vs-base diff (the file tree + diff). From a
-		// per-commit/working-tree drill-in, restore the branch tree on the way; from
-		// the overview, drop back to the branch diff it (or its origin) summarizes.
-		// On the base branch the diff is degenerate (merge base = HEAD), so the key
-		// is inert — matching the hidden footer/help hint — and the reader stays put.
-		if m.onBaseBranch() {
-			return m, nil
-		}
-		// A contributor's detail page normalizes through the ranking it sits above.
-		if m.mode == viewAuthorDetail {
-			m.exitAuthorDetail()
-		}
-		switch m.mode {
-		case viewBranch:
-			// already showing the branch diff
-		case viewCommit:
-			m.exitCommit()
-			m.exitLog()
-		case viewOverview:
-			// Normalize through the origin so a commit overview's stashed branch
-			// tree is restored, then land on the branch diff.
-			m.exitOverview()
-			switch m.mode {
-			case viewCommit:
-				m.exitCommit()
-				m.exitLog()
-			case viewLog:
-				m.exitLog()
-			}
-		default:
-			m.exitLog()
-		}
-		return m, nil
+		return m, m.goBranchDiff()
 
 	case "?":
 		m.showHelp = true
@@ -465,21 +506,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "S":
-		// Toggle the whole-repo Stats dashboard. It belongs to the commit-history
-		// view (a repo-wide summary), so it's only reachable from there — not from a
-		// commit drill-in or the branch diff. `S` (or esc) backs out to the history.
-		// From a contributor's detail page, drop to the ranking first so `S` toggles
-		// the whole dashboard off in one press.
-		if m.mode == viewAuthorDetail {
-			m.exitAuthorDetail()
-		}
-		switch m.mode {
-		case viewOverview:
-			m.exitOverview()
-		case viewLog:
-			return m, m.enterOverview()
-		}
-		return m, nil
+		return m, m.toggleStats()
 
 	case "s":
 		// Toggle unified ↔ side-by-side. Row counts differ between modes, so
@@ -504,6 +531,27 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.themeSel = m.themeIdx
 		m.snapTheme = m.themeIdx
 		m.snapDark = m.dark
+		return m, nil
+
+	case "ctrl+k":
+		// Open global search: one query across commit messages, changed-file paths,
+		// and the code in the branch diff, grouped by category.
+		m.showGlobalSearch = true
+		m.gsInput = ""
+		m.gsSel = 0
+		return m, nil
+
+	case ":":
+		// Open the command palette: a fuzzy-searchable list of every action.
+		m.showPalette = true
+		m.paletteInput = ""
+		m.paletteSel = 0
+		return m, nil
+
+	case "x":
+		// Mark the file (branch/commit views) or commit (history) under the cursor
+		// reviewed — clearing the last one fires the celebration.
+		m.toggleReviewed()
 		return m, nil
 
 	// --- sidebar collapse / expand (`[` narrows toward hidden, `]` widens) ---
@@ -837,6 +885,10 @@ func abs(n int) int {
 func (m *model) refresh() {
 	m.base = git.BaseRef(m.repo, m.baseName)
 	m.shortstat = git.Shortstat(m.repo, m.base)
+	// Drop the global-search corpora so the next search rebuilds them against the
+	// refreshed working tree rather than a stale snapshot.
+	m.gsFiles = nil
+	m.gsCode = nil
 	// The whole-history Summary depends only on committed history, so invalidate
 	// its cached stats only when HEAD actually moved — a working-tree edit (the
 	// common refresh trigger) doesn't change history, and recomputing the full
@@ -973,6 +1025,83 @@ func diffLinesEqual(a, b []diff.Line) bool {
 		}
 	}
 	return true
+}
+
+// goHistory returns to the commit-history view (the default) from anywhere. From
+// a per-commit tree it steps back to the list rather than reloading from scratch;
+// a contributor's detail page normalizes through the ranking it sits above; the
+// overview unwinds through its origin so a commit overview's stashed branch tree
+// is restored. Shared by the `L` key and the command palette.
+func (m *model) goHistory() tea.Cmd {
+	if m.mode == viewAuthorDetail {
+		m.exitAuthorDetail()
+	}
+	switch m.mode {
+	case viewLog:
+		// already in history
+	case viewCommit:
+		m.exitCommit()
+	case viewOverview:
+		m.exitOverview()
+		if m.mode == viewCommit {
+			m.exitCommit()
+		} else if m.mode != viewLog {
+			m.enterLog()
+		}
+	default:
+		m.enterLog()
+	}
+	return nil
+}
+
+// goBranchDiff opens the aggregated branch-vs-base diff (the file tree + diff).
+// From a per-commit/working-tree drill-in it restores the branch tree on the way;
+// from the overview it drops back to the branch diff it (or its origin)
+// summarizes. On the base branch the diff is degenerate (merge base = HEAD), so
+// it's inert. Shared by the `D` key and the command palette.
+func (m *model) goBranchDiff() tea.Cmd {
+	if m.onBaseBranch() {
+		return nil
+	}
+	if m.mode == viewAuthorDetail {
+		m.exitAuthorDetail()
+	}
+	switch m.mode {
+	case viewBranch:
+		// already showing the branch diff
+	case viewCommit:
+		m.exitCommit()
+		m.exitLog()
+	case viewOverview:
+		m.exitOverview()
+		switch m.mode {
+		case viewCommit:
+			m.exitCommit()
+			m.exitLog()
+		case viewLog:
+			m.exitLog()
+		}
+	default:
+		m.exitLog()
+	}
+	return nil
+}
+
+// toggleStats toggles the whole-repo Stats dashboard, which belongs to the
+// commit-history view. From a contributor's detail page it drops to the ranking
+// first so one press toggles the whole dashboard off. Shared by `S` and the
+// command palette.
+func (m *model) toggleStats() tea.Cmd {
+	if m.mode == viewAuthorDetail {
+		m.exitAuthorDetail()
+	}
+	switch m.mode {
+	case viewOverview:
+		m.exitOverview()
+	case viewLog:
+		return m.enterOverview()
+	}
+	return nil
 }
 
 // clampCommitCursor keeps the history cursor within the (possibly reloaded)
