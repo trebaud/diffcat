@@ -25,8 +25,6 @@ type paletteAction struct {
 // empty query; the fuzzy filter reorders by score once the reader types.
 func (m model) paletteActions() []paletteAction {
 	return []paletteAction{
-		{"Mark file / commit reviewed", "x", func(m *model) tea.Cmd { m.toggleReviewed(); return nil }},
-		{"Jump to next unreviewed", "", func(m *model) tea.Cmd { m.advanceToNextUnreviewed(); return nil }},
 		{"Toggle unified / side-by-side diff", "s", func(m *model) tea.Cmd {
 			if m.mode == viewLog {
 				return nil

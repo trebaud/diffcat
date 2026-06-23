@@ -160,13 +160,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.animFrame++
 			m.animAccum -= tickSlow
 		}
-		// Retire the onboarding flourishes on their own timers, and wind down the
-		// celebration a frame at a time.
+		// Retire the onboarding flourish on its own timer.
 		if m.showToast && m.animFrame-m.toastStart >= toastFrames {
 			m.showToast = false
-		}
-		if m.celebrate > 0 {
-			m.celebrate--
 		}
 		return m, tickCmd(interval)
 
@@ -220,12 +216,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	// The branch-cleared celebration is dismissed by any key (it also bows out on
-	// its own timer).
-	if m.celebrate > 0 {
-		m.celebrate = 0
-		return m, nil
-	}
 	// Once the reader touches a key, retire the first-run hint (it also auto-fades);
 	// the keypress itself still goes on to act.
 	m.showToast = false
@@ -539,12 +529,6 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.showPalette = true
 		m.paletteInput = ""
 		m.paletteSel = 0
-		return m, nil
-
-	case "x":
-		// Mark the file (branch/commit views) or commit (history) under the cursor
-		// reviewed — clearing the last one fires the celebration.
-		m.toggleReviewed()
 		return m, nil
 
 	// --- sidebar collapse / expand (`[` narrows toward hidden, `]` widens) ---

@@ -6,27 +6,15 @@ import (
 	"path/filepath"
 )
 
-// state.go persists per-session UI state that isn't a preference: which files /
-// commits the reader has marked reviewed, and whether the one-time onboarding
-// hint has been shown. Unlike config.go (preferences the reader chose), this is
-// progress the tool remembers on the reader's behalf. It lives under the XDG
-// state dir (transient, machine-local) rather than the config dir.
+// state.go persists per-session UI state that isn't a preference: whether the
+// one-time onboarding hint has been shown. Unlike config.go (preferences the
+// reader chose), this is progress the tool remembers on the reader's behalf. It
+// lives under the XDG state dir (transient, machine-local) rather than the config
+// dir.
 
-// reviewScope is the set of reviewed item ids (file paths in the branch/commit
-// views, commit SHAs in the history view) for one diff snapshot. Key is the
-// base..HEAD signature the marks were made against; when it changes (new commits
-// or a different base) the marks no longer map onto the diff and are dropped, so
-// stale checkmarks expire on their own without a manual reset.
-type reviewScope struct {
-	Key   string          `json:"key"`
-	Items map[string]bool `json:"items,omitempty"`
-}
-
-// userState is the persisted progress file. Reviews is keyed by repo root so one
-// state file can track several checkouts.
+// userState is the persisted progress file.
 type userState struct {
-	FirstRunDone bool                   `json:"firstRunDone,omitempty"`
-	Reviews      map[string]reviewScope `json:"reviews,omitempty"`
+	FirstRunDone bool `json:"firstRunDone,omitempty"`
 }
 
 // statePath returns the progress file location, following the XDG Base Directory
@@ -75,4 +63,12 @@ func saveState(st userState) error {
 		return err
 	}
 	return os.WriteFile(p, b, 0o644)
+}
+
+// markFirstRunDone records that the one-time onboarding hint has been shown, so
+// it never appears again. Best-effort.
+func markFirstRunDone(repo string) {
+	st := loadState()
+	st.FirstRunDone = true
+	_ = saveState(st)
 }

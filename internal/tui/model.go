@@ -204,19 +204,6 @@ type model struct {
 
 	showHelp bool
 
-	// reviewed marks which items the reader has cleared: file paths in the branch /
-	// commit views, commit SHAs in the history view. `x` toggles the item under the
-	// cursor; the header shows a progress bar and clearing the last one fires the
-	// celebration. Persisted per-repo (state.go), keyed by the base..HEAD signature
-	// so the marks expire when the diff they describe moves on.
-	reviewed map[string]bool
-
-	// celebrate counts down the frames of the "branch cleared" celebration, fired
-	// once when the last reviewable item is marked. celebrated latches that fire so
-	// it doesn't replay until something is unmarked and re-cleared.
-	celebrate  int
-	celebrated bool
-
 	// Command palette (`:`). showPalette gates the floating action picker;
 	// paletteInput is the fuzzy query and paletteSel the highlighted action.
 	showPalette  bool
@@ -325,22 +312,12 @@ func newModel(repo, base, baseName string, baseIsDefault bool, branch string, fi
 
 		authorModules:          map[string][]git.ModuleCount{},
 		authorModulesComputing: map[string]bool{},
-
-		reviewed: map[string]bool{},
 	}
 
-	// Restore review progress and onboarding state. The one-time first-run hint
-	// is a playful touch; it bows out under reduce-motion (no tick to drive or
-	// auto-dismiss it).
+	// Restore onboarding state. The one-time first-run hint is a playful touch; it
+	// bows out under reduce-motion (no tick to drive or auto-dismiss it).
 	st := loadState()
 	m.firstRunDone = st.FirstRunDone
-	if sc, ok := st.Reviews[repo]; ok && sc.Key == m.reviewKey() {
-		for id, done := range sc.Items {
-			if done {
-				m.reviewed[id] = true
-			}
-		}
-	}
 	if !r.reduceMotion && !m.firstRunDone {
 		m.showToast = true
 		markFirstRunDone(repo)

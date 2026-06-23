@@ -1,24 +1,21 @@
 package tui
 
 import (
-	"fmt"
 	"image/color"
 	"strings"
 
 	"charm.land/lipgloss/v2"
 )
 
-// onboard.go holds the playful, non-essential flourishes: the "branch cleared"
-// celebration card and the one-time first-run hint toast. Each is gated behind
-// reduce-motion at the source (newModel skips arming them), so this file only
-// handles how they look, not whether they run.
+// onboard.go holds the playful, non-essential flourishes: the one-time first-run
+// hint toast. It's gated behind reduce-motion at the source (newModel skips arming
+// it), so this file only handles how it looks, not whether it runs.
 
 // toastFrames is how many frames the first-run hint lingers before fading out.
 const toastFrames = 30
 
 // rainbowPalette is the nyan trail's perceptually-even rainbow (constant OKLCH
-// L=0.72 C=0.155, hue rotating) — shared by the progress bar and the
-// celebration so every rainbow in the UI matches.
+// L=0.72 C=0.155, hue rotating), so every rainbow in the UI matches.
 var rainbowPalette = []color.Color{
 	lipgloss.Color("#f67972"), lipgloss.Color("#e19005"),
 	lipgloss.Color("#5ebd64"), lipgloss.Color("#00c1c2"),
@@ -46,25 +43,6 @@ func rainbowBar(n, frame int) string {
 		b.WriteString(s.Render(strings.Repeat("━", end-start)))
 	}
 	return b.String()
-}
-
-// celebrationBox is the "branch cleared" card shown when the last reviewable item
-// is marked: the wide-eyed nyan over a full rainbow, with the final tally.
-func (m model) celebrationBox() string {
-	done, total := m.reviewProgress()
-	frame := m.animFrame
-	lines := []string{
-		titleStyle.Render("✨  branch cleared  ✨"),
-		"",
-		rainbowBar(20, frame) + " " + catStyle.Render("=^o^="),
-		"",
-		headingStyle.Render(fmt.Sprintf("%d / %d reviewed", done, total)),
-	}
-	if m.shortstat != "" {
-		lines = append(lines, mutedStyle.Render(m.shortstat))
-	}
-	lines = append(lines, "", mutedStyle.Render("press any key to dismiss"))
-	return floatingBox(strings.Join(lines, "\n"))
 }
 
 // toastText is the one-time first-run hint that briefly replaces the footer,

@@ -277,26 +277,13 @@ func TestRenderNoWrap(t *testing.T) {
 	openLog := logSampleModel()
 	openLog.logDiffOpen = true
 	openLog.focus = focusDiff
-	// Review-progress hook: a branch view with some files reviewed (header bar +
-	// dimmed/checked rows), a history view with a reviewed commit, an empty change
-	// list (clean-tree resting state), and the branch-cleared celebration.
-	reviewedBranch := sampleModel()
-	reviewedBranch.reviewed = map[string]bool{"internal/tui/view.go": true, "old.txt": true}
-	reviewedLog := logSampleModel()
-	reviewedLog.reviewed = map[string]bool{"aaa111full": true}
+	// An empty change list (clean-tree resting state).
 	cleanTree := sampleModel()
 	cleanTree.files, cleanTree.rows = nil, nil
-	celebrating := sampleModel()
-	celebrating.reviewed = map[string]bool{}
-	for _, f := range celebrating.files {
-		celebrating.reviewed[f.Path] = true
-	}
-	celebrating.celebrate = 10
-	celebrating.animFrame = 4
 	// The command palette and the first-run footer hint.
 	palette := sampleModel()
 	palette.showPalette = true
-	palette.paletteInput = "rev"
+	palette.paletteInput = "theme"
 	// Global search: a query with hits across all three categories. The corpora are
 	// seeded directly so the render exercises grouped results (including a code line
 	// far wider than a narrow pane) without shelling out to git.
@@ -310,7 +297,7 @@ func TestRenderNoWrap(t *testing.T) {
 	}
 	toast := sampleModel()
 	toast.showToast = true
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, detailAI, detailHuman, detailNoMods, detailLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog, reviewedBranch, reviewedLog, cleanTree, celebrating, palette, gsearch, toast} {
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, detailAI, detailHuman, detailNoMods, detailLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog, cleanTree, palette, gsearch, toast} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -345,11 +332,7 @@ func TestFullScreenFill(t *testing.T) {
 	wideLog.commits[0].Tags = []string{"v1.2.0"}
 	openLog := logSampleModel()
 	openLog.logDiffOpen = true
-	// A branch view with reviewed files, focused on the diff so the minimap and the
-	// reviewed row styling are both exercised at exact fill.
-	reviewedFill := sampleModel()
-	reviewedFill.reviewed = map[string]bool{"internal/tui/view.go": true}
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, commitSampleModel(), overview, overviewLoading, detailAI, detailHuman, hiddenSidebar, wideLog, reviewedFill} {
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, commitSampleModel(), overview, overviewLoading, detailAI, detailHuman, hiddenSidebar, wideLog} {
 		m.focus = focusDiff
 		for _, split := range []bool{false, true} {
 			m.splitView = split
@@ -384,14 +367,7 @@ func TestOverlayFloats(t *testing.T) {
 	palette.showPalette = true
 	palette.paletteInput = "th"
 
-	celebrating := sampleModel()
-	celebrating.reviewed = map[string]bool{}
-	for _, f := range celebrating.files {
-		celebrating.reviewed[f.Path] = true
-	}
-	celebrating.celebrate = 12
-
-	for _, m := range []model{help, details, palette, celebrating} {
+	for _, m := range []model{help, details, palette} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 24}, {80, 20}, {60, 14}} {
 			m.width, m.height = sz[0], sz[1]
 			out := m.render()
@@ -586,11 +562,10 @@ func TestLogWorkingTreeRow(t *testing.T) {
 	}
 }
 
-// TestPlayfulOverlaysMonochrome renders the celebration (under reduce-motion, the
-// static fallback) and the command palette with the no-color Monochrome theme
-// applied, guarding that the playful additions degrade cleanly: no panic, exact
-// height, and no overflow. The theme is restored afterward so other tests keep
-// the default palette.
+// TestPlayfulOverlaysMonochrome renders the command palette and the clean-tree
+// resting state with the no-color Monochrome theme applied, guarding that the
+// playful additions degrade cleanly: no panic, exact height, and no overflow. The
+// theme is restored afterward so other tests keep the default palette.
 func TestPlayfulOverlaysMonochrome(t *testing.T) {
 	idx := themeIndexByName("Monochrome")
 	if idx < 0 {
@@ -599,22 +574,14 @@ func TestPlayfulOverlaysMonochrome(t *testing.T) {
 	ApplyTheme(themes[idx], true)
 	defer ApplyTheme(themeGitHub, true)
 
-	celebrating := sampleModel()
-	celebrating.reviewed = map[string]bool{}
-	for _, f := range celebrating.files {
-		celebrating.reviewed[f.Path] = true
-	}
-	celebrating.celebrate = 12
-	celebrating.reduceMotion = true // the static, no-animation celebration card
-
 	palette := sampleModel()
 	palette.showPalette = true
-	palette.paletteInput = "next"
+	palette.paletteInput = "theme"
 
 	cleanTree := sampleModel()
 	cleanTree.files, cleanTree.rows = nil, nil // the clean-tree resting state
 
-	for _, m := range []model{celebrating, palette, cleanTree} {
+	for _, m := range []model{palette, cleanTree} {
 		for _, sz := range [][2]int{{120, 40}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			lines := strings.Split(m.render(), "\n")

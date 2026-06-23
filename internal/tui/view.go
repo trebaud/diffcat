@@ -57,11 +57,8 @@ func (m model) render() string {
 	}
 
 	// Overlays float above the dimmed screen rather than replacing it, so the
-	// reader keeps their place in the background. The branch-cleared celebration
-	// sits on top of everything else.
+	// reader keeps their place in the background.
 	switch {
-	case m.celebrate > 0:
-		return m.floatOverlay(screen, m.celebrationBox())
 	case m.showHelp:
 		return m.floatOverlay(screen, m.helpBox())
 	case m.showCommitDetails:
@@ -200,33 +197,12 @@ func blendColor(a, b color.Color, t float64) color.Color {
 	return color.RGBA{R: mix(ar, br), G: mix(ag, bg), B: mix(ab, bb), A: 0xff}
 }
 
-// headerReview is the always-on review-progress badge appended to the header in
-// the views that have a review hook: "reviewed 3/12 ███░░░░░░░ 25%", the filled
-// run in green over a faint track. Empty when the view has nothing to review, so
-// callers can append it unconditionally.
-func (m model) headerReview() string {
-	done, total := m.reviewProgress()
-	if total == 0 {
-		return ""
-	}
-	const w = 10
-	filled := 0
-	if done >= total {
-		filled = w
-	} else {
-		filled = done * w / total
-	}
-	bar := addedStyle.Render(strings.Repeat("█", filled)) + borderStyle.Render(strings.Repeat("░", w-filled))
-	return mutedStyle.Render(fmt.Sprintf("  reviewed %d/%d ", done, total)) + bar +
-		mutedStyle.Render(fmt.Sprintf(" %d%%", done*100/total))
-}
-
 func (m model) headerView() string {
 	left := titleStyle.Render("diffcat")
 	if m.mode == viewLog {
 		mid := mutedStyle.Render(fmt.Sprintf("  %s · history", branchLabel(m.branch)))
 		count := "  " + headingStyle.Render(fmt.Sprintf("%d commits", m.featureCommitCount()))
-		return left + mid + count + m.headerReview()
+		return left + mid + count
 	}
 	if m.mode == viewOverview {
 		mid := mutedStyle.Render(fmt.Sprintf("  %s · stats", branchLabel(m.branch)))
@@ -271,9 +247,7 @@ func (m model) headerView() string {
 	if m.shortstat != "" {
 		stat = "  " + headingStyle.Render(m.shortstat)
 	}
-	// The review-progress badge comes before the shortstat so it survives the
-	// width truncation — clearing the diff is the headline signal here.
-	return left + mid + m.headerReview() + stat
+	return left + mid + stat
 }
 
 // padLine truncates a single styled line to width (without wrapping) and pads
@@ -447,11 +421,6 @@ func (m model) commitRow(c git.Commit, selected bool, width int) string {
 	if c.IsMerge() {
 		glyph = "◆"
 	}
-	// A reviewed commit wears a check in place of its node glyph (same single
-	// cell), matching the file tree's reviewed cue.
-	if m.reviewed[c.SHA] {
-		glyph = "✓"
-	}
 	if m.sidebar == sidebarWide || m.mode == viewLog {
 		return m.commitRowWide(c, glyph, selected, width)
 	}
@@ -515,10 +484,6 @@ func (m model) commitRowWide(c git.Commit, glyph string, selected bool, width in
 	if c.IsMerge() {
 		glyphStyle = lipgloss.NewStyle().Foreground(colWarn).Bold(true)
 	}
-	reviewed := m.reviewed[c.SHA]
-	if reviewed {
-		glyphStyle = addedStyle // a green check
-	}
 	var b strings.Builder
 	b.WriteString(glyphStyle.Render(glyph))
 	b.WriteString(" ")
@@ -528,11 +493,7 @@ func (m model) commitRowWide(c git.Commit, glyph string, selected bool, width in
 		b.WriteString(refsStyled)
 		b.WriteString("  ")
 	}
-	if reviewed {
-		b.WriteString(mutedStyle.Render(subj)) // cleared — recede
-	} else {
-		b.WriteString(subj)
-	}
+	b.WriteString(subj)
 	b.WriteString(strings.Repeat(" ", gap))
 	if meta != "" {
 		b.WriteString(mutedStyle.Render(meta))
@@ -582,14 +543,6 @@ func (m model) treeRow(r treeRow, selected bool, width int) string {
 		if !r.collapsed {
 			glyph = "▾"
 		}
-	}
-
-	// A reviewed file wears a check in place of its status glyph (same single
-	// cell, so the layout is unchanged) and dims, so cleared files recede and the
-	// eye falls on what's left to read.
-	reviewed := !r.isDir && m.reviewed[r.path]
-	if reviewed {
-		glyph = "✓"
 	}
 
 	// Folder names carry a trailing slash so a name collision with a file reads
@@ -650,20 +603,13 @@ func (m model) treeRow(r treeRow, selected bool, width int) string {
 		nameStyled = dirStyle.Render(name)
 		glyphStyled = dirStyle.Render(glyph)
 	}
-	// A reviewed file recedes: a green check and a dimmed name. It also opts out of
-	// the unseen pulse/shimmer below — once you've cleared a file, it should sit
-	// quietly even if a later sync touches it again.
-	if reviewed {
-		glyphStyled = addedStyle.Render(glyph)
-		nameStyled = mutedStyle.Render(name)
-	}
 	// A file a sync changed (and the reader hasn't opened) gently breathes its
 	// status glyph through the pulse ramp — a quiet dim→bright→dim ease, not a
 	// blink. The pulse persists until its diff is opened (loadDiff clears the flag).
 	// On top of that, the instant a change lands a bright highlight sweeps once
 	// across the name — a clear "this just changed" cue that then clears itself,
 	// leaving the quieter glyph pulse to carry on.
-	if !r.isDir && !reviewed && m.unseen[r.path] && !m.reduceMotion {
+	if !r.isDir && m.unseen[r.path] && !m.reduceMotion {
 		glyphStyled = lipgloss.NewStyle().Foreground(pulseShade(m.animFrame)).Bold(true).Render(glyph)
 		if swept, live := shimmerName(name, m.animFrame-m.unseenAt[r.path]); live {
 			nameStyled = swept
@@ -671,7 +617,7 @@ func (m model) treeRow(r treeRow, selected bool, width int) string {
 	}
 
 	stats := mutedStyle.Render(statsPlain)
-	if !r.isDir && !r.binary && !reviewed && statsPlain != "" {
+	if !r.isDir && !r.binary && statsPlain != "" {
 		stats = addedStyle.Render(fmt.Sprintf("+%d", r.added)) + " " +
 			removedStyle.Render(fmt.Sprintf("-%d", r.deleted))
 	}
@@ -1337,14 +1283,14 @@ func (m model) footerView() string {
 		if !m.onBaseBranch() {
 			keys = append(keys, "D "+m.branchDiffLabel())
 		}
-		keys = append(keys, "x review", "d details", "S stats", "t theme", "⌕ ctrl+k search", "? help", "q quit")
+		keys = append(keys, "d details", "S stats", "t theme", "⌕ ctrl+k search", "? help", "q quit")
 	case viewCommit:
 		keys = []string{
-			"j/k move", "Tab ⇄ pane", "h/l scroll", "f find", "/ search", "x review", "[ ] sidebar", "s split", "t theme", "⌕ ctrl+k search", "esc back", "? help", "q quit",
+			"j/k move", "Tab ⇄ pane", "h/l scroll", "f find", "/ search", "[ ] sidebar", "s split", "t theme", "⌕ ctrl+k search", "esc back", "? help", "q quit",
 		}
 	default:
 		keys = []string{
-			"j/k move", "Tab ⇄ pane", "h/l scroll", "↵ open/expand", "f find", "/ search", "x review", "[ ] sidebar", "s split", "t theme", "⌕ ctrl+k search", "L history", "? help", "q quit",
+			"j/k move", "Tab ⇄ pane", "h/l scroll", "↵ open/expand", "f find", "/ search", "[ ] sidebar", "s split", "t theme", "⌕ ctrl+k search", "L history", "? help", "q quit",
 		}
 	}
 	footer := mutedStyle.Render(strings.Join(keys, "  ·  "))
@@ -1403,8 +1349,7 @@ func (m model) helpBox() string {
 	}
 	lines = append(lines,
 		"",
-		headingStyle.Render("  review & commands"),
-		"  x            mark the file / commit under the cursor reviewed",
+		headingStyle.Render("  commands"),
 		"  ctrl+k       global search — commits · files · code",
 		"  :            command palette — fuzzy-run any action",
 		"",
