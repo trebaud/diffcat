@@ -293,7 +293,7 @@ func TestRenderNoWrap(t *testing.T) {
 	}
 	celebrating.celebrate = 10
 	celebrating.animFrame = 4
-	// The command palette, the startup splash, and the first-run footer hint.
+	// The command palette and the first-run footer hint.
 	palette := sampleModel()
 	palette.showPalette = true
 	palette.paletteInput = "rev"
@@ -308,12 +308,9 @@ func TestRenderNoWrap(t *testing.T) {
 		{path: "internal/tui/view.go", text: "func render() string { return everythingHere(width, height) }"},
 		{path: "very/deep/nested/path/that/should/truncate/handler.go", text: "  e := handleEverything(request, response, context, deadline)"},
 	}
-	splash := sampleModel()
-	splash.showSplash = true
-	splash.animFrame = 3
 	toast := sampleModel()
 	toast.showToast = true
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, detailAI, detailHuman, detailNoMods, detailLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog, reviewedBranch, reviewedLog, cleanTree, celebrating, palette, gsearch, splash, toast} {
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, detailAI, detailHuman, detailNoMods, detailLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog, reviewedBranch, reviewedLog, cleanTree, celebrating, palette, gsearch, toast} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -387,10 +384,6 @@ func TestOverlayFloats(t *testing.T) {
 	palette.showPalette = true
 	palette.paletteInput = "th"
 
-	splash := sampleModel()
-	splash.showSplash = true
-	splash.animFrame = 2
-
 	celebrating := sampleModel()
 	celebrating.reviewed = map[string]bool{}
 	for _, f := range celebrating.files {
@@ -398,7 +391,7 @@ func TestOverlayFloats(t *testing.T) {
 	}
 	celebrating.celebrate = 12
 
-	for _, m := range []model{help, details, palette, splash, celebrating} {
+	for _, m := range []model{help, details, palette, celebrating} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 24}, {80, 20}, {60, 14}} {
 			m.width, m.height = sz[0], sz[1]
 			out := m.render()

@@ -57,11 +57,9 @@ func (m model) render() string {
 	}
 
 	// Overlays float above the dimmed screen rather than replacing it, so the
-	// reader keeps their place in the background. The startup splash and the
-	// branch-cleared celebration sit on top of everything else.
+	// reader keeps their place in the background. The branch-cleared celebration
+	// sits on top of everything else.
 	switch {
-	case m.showSplash:
-		return m.floatOverlay(screen, m.splashBox())
 	case m.celebrate > 0:
 		return m.floatOverlay(screen, m.celebrationBox())
 	case m.showHelp:

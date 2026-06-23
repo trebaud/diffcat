@@ -162,9 +162,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Retire the onboarding flourishes on their own timers, and wind down the
 		// celebration a frame at a time.
-		if m.showSplash && m.animFrame >= m.splashEnd {
-			m.showSplash = false
-		}
 		if m.showToast && m.animFrame-m.toastStart >= toastFrames {
 			m.showToast = false
 		}
@@ -223,12 +220,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	// The startup splash and the branch-cleared celebration are dismissed by any
-	// key (they also bow out on their own timer).
-	if m.showSplash {
-		m.showSplash = false
-		return m, nil
-	}
+	// The branch-cleared celebration is dismissed by any key (it also bows out on
+	// its own timer).
 	if m.celebrate > 0 {
 		m.celebrate = 0
 		return m, nil

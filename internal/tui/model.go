@@ -234,13 +234,9 @@ type model struct {
 	gsFiles          []git.FileChange
 	gsCode           []gsCodeLine
 
-	// Onboarding. showSplash gates the startup nyan-streak splash (skipped under
-	// reduceMotion); splashEnd is the animFrame it auto-dismisses at. showToast
-	// gates the one-time first-run footer hint; toastStart is the animFrame it
-	// appeared (it fades out a few seconds later). firstRunDone mirrors the
-	// persisted flag so the hint shows exactly once, ever.
-	showSplash   bool
-	splashEnd    int
+	// Onboarding. showToast gates the one-time first-run footer hint; toastStart
+	// is the animFrame it appeared (it fades out a few seconds later).
+	// firstRunDone mirrors the persisted flag so the hint shows exactly once, ever.
 	showToast    bool
 	toastStart   int
 	firstRunDone bool
@@ -333,9 +329,9 @@ func newModel(repo, base, baseName string, baseIsDefault bool, branch string, fi
 		reviewed: map[string]bool{},
 	}
 
-	// Restore review progress and onboarding state. The startup splash and the
-	// one-time first-run hint are the playful touches; both bow out under
-	// reduce-motion (no tick to drive or auto-dismiss them).
+	// Restore review progress and onboarding state. The one-time first-run hint
+	// is a playful touch; it bows out under reduce-motion (no tick to drive or
+	// auto-dismiss it).
 	st := loadState()
 	m.firstRunDone = st.FirstRunDone
 	if sc, ok := st.Reviews[repo]; ok && sc.Key == m.reviewKey() {
@@ -345,21 +341,17 @@ func newModel(repo, base, baseName string, baseIsDefault bool, branch string, fi
 			}
 		}
 	}
-	if !r.reduceMotion {
-		m.showSplash = true
-		m.splashEnd = splashFrames
-		if !m.firstRunDone {
-			m.showToast = true
-			markFirstRunDone(repo)
-			m.firstRunDone = true
-		}
+	if !r.reduceMotion && !m.firstRunDone {
+		m.showToast = true
+		markFirstRunDone(repo)
+		m.firstRunDone = true
 	}
 
 	m.rebuildTree()
-	m.loadDiff()
 	// diffcat always opens on the branch's commit history — the timeline of what
 	// changed, on the default branch or a feature branch alike. The aggregated
-	// branch-vs-base diff (the file tree + diff) is one `D` away.
+	// branch-vs-base diff (the file tree + diff) is one `D` away, and loads lazily
+	// then (exitLog → loadDiff), so we don't parse it eagerly at startup.
 	m.enterLog()
 	return m
 }
