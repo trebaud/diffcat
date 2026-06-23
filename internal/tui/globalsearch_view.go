@@ -15,11 +15,26 @@ import (
 // three read as one idiom; the extra wrinkle here is the non-selectable header
 // rows (each with a category glyph + count) and the blank spacers between groups.
 
-// gsPageSize is how many results one page of the overlay shows. The list
-// paginates rather than scrolling continuously, so a large result set — every
-// commit by one author, say — is walked a page at a time with ←/→ instead of
-// scrolled past one row at a time.
-const gsPageSize = 8
+// gsPageSize is how many results one page of the overlay shows, grown to fill the
+// terminal height so the modal uses the space it's given. The list paginates
+// rather than scrolling, so a large result set — every commit by one author, say
+// — is walked a page at a time with ←/→. Floored and capped so the box stays a
+// comfortable centered modal: never a cramped peephole, never edge to edge.
+func (m model) gsPageSize() int {
+	// Leave room for everything that frames the result area — the prompt/hint block
+	// (3 rows), the footer block (2), the rounded border (2), the most category
+	// chrome a page can carry (up to 5: a header per category and a spacer between)
+	// — plus a few rows of margin top and bottom so the modal floats rather than
+	// butting against the screen edges.
+	n := m.height - 16
+	if n < 6 {
+		n = 6
+	}
+	if n > 20 {
+		n = 20
+	}
+	return n
+}
 
 // gsRow is one rendered line in the list: a category header (header set, with cat
 // naming the group), a blank spacer between groups (spacer set), or a result (res
@@ -86,8 +101,8 @@ func (c gsCategory) tint() color.Color {
 func (m model) globalSearchBox() string {
 	results := m.gsResults()
 	w := m.width - 6
-	if w > 64 {
-		w = 64
+	if w > 100 {
+		w = 100
 	}
 	if w < 28 {
 		w = 28
@@ -102,23 +117,24 @@ func (m model) globalSearchBox() string {
 	// The page is derived from the selected result, so ↑/↓ flow across page edges
 	// while ←/→ jump a whole page (see the key handler). Clamp a stale selection
 	// (the query just changed) back into range.
+	ps := m.gsPageSize()
 	pageCount := 1
 	if total > 0 {
-		pageCount = (total + gsPageSize - 1) / gsPageSize
+		pageCount = (total + ps - 1) / ps
 	}
 	sel := m.gsSel
 	if sel >= total {
 		sel = max(0, total-1)
 	}
-	page := min(sel/gsPageSize, pageCount-1)
-	start := page * gsPageSize
-	stop := min(start+gsPageSize, total)
+	page := min(sel/ps, pageCount-1)
+	start := page * ps
+	stop := min(start+ps, total)
 	rows := gsLayout(results[start:stop], start)
 
 	// Reserve a stable result-area height: one full page plus the most chrome this
 	// query's pages can carry (a header per category present, a spacer between), so
 	// the box doesn't jump from page to page.
-	pageRows := gsPageSize
+	pageRows := ps
 	if cats := len(counts); cats > 0 {
 		pageRows += cats + (cats - 1)
 	}

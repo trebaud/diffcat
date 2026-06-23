@@ -94,8 +94,10 @@ func TestGlobalSearchByAuthor(t *testing.T) {
 // last page.
 func TestGlobalSearchPagination(t *testing.T) {
 	m := logSampleModel()
+	m.width, m.height = 120, 24
+	ps := m.gsPageSize()
 	m.commits = nil
-	for i := 0; i < gsPageSize*2+1; i++ { // spans three pages
+	for i := 0; i < ps*2+1; i++ { // spans three pages
 		m.commits = append(m.commits, git.Commit{
 			SHA:     fmt.Sprintf("sha%02dfull", i),
 			Short:   fmt.Sprintf("sha%02d", i),
@@ -108,13 +110,12 @@ func TestGlobalSearchPagination(t *testing.T) {
 	m.gsFiles = []git.FileChange{}
 	m.gsCode = []gsCodeLine{}
 	m.gsInput = "ada" // matches every commit's author
-	m.width, m.height = 120, 40
 
 	results := m.gsResults()
-	if len(results) != gsPageSize*2+1 {
-		t.Fatalf("want %d author matches, got %d", gsPageSize*2+1, len(results))
+	if len(results) != ps*2+1 {
+		t.Fatalf("want %d author matches, got %d", ps*2+1, len(results))
 	}
-	pageCount := (len(results) + gsPageSize - 1) / gsPageSize
+	pageCount := (len(results) + ps - 1) / ps
 
 	if out := m.globalSearchBox(); !strings.Contains(out, fmt.Sprintf("page 1/%d", pageCount)) {
 		t.Errorf("first page should report page 1/%d:\n%s", pageCount, out)

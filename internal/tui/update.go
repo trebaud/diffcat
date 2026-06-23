@@ -244,13 +244,15 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			// Next page: select its first result (the page is derived from the
 			// selection, so this flips the view). Clamped to the last result.
 			if len(results) > 0 {
-				page := m.gsSel / gsPageSize
-				m.gsSel = min((page+1)*gsPageSize, len(results)-1)
+				ps := m.gsPageSize()
+				page := m.gsSel / ps
+				m.gsSel = min((page+1)*ps, len(results)-1)
 			}
 		case "left", "pgup", "ctrl+b":
 			// Previous page: select its first result.
-			if page := m.gsSel / gsPageSize; page > 0 {
-				m.gsSel = (page - 1) * gsPageSize
+			ps := m.gsPageSize()
+			if page := m.gsSel / ps; page > 0 {
+				m.gsSel = (page - 1) * ps
 			} else {
 				m.gsSel = 0
 			}
