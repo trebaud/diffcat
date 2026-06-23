@@ -10,8 +10,8 @@ import (
 )
 
 // globalsearch.go is the global search overlay (ctrl+k): one query run across
-// several sources at once — commit messages, changed-file paths, and the code in
-// the branch diff — with the hits grouped under category headers. It's the
+// several sources at once — commit messages and authors, changed-file paths, and
+// the code in the branch diff — with the hits grouped under category headers. It's the
 // content-search counterpart to the command palette (`:`, palette.go), which
 // searches actions rather than content. Selecting a hit navigates to it (jumping
 // to the commit, opening the file, or scrolling the diff to the matched line).
@@ -79,14 +79,18 @@ func (m *model) gsResults() []gsResult {
 	lq := strings.ToLower(q)
 	var out []gsResult
 
-	// Commits — subject or body. The visible title is the subject, so only a
-	// subject hit can be emphasised; a body-only match still lists, unmarked.
+	// Commits — subject, body, or author (name / email). The visible title is the
+	// subject, so only a subject hit can be emphasised; a body- or author-only
+	// match still lists, unmarked (the author shows in the sub-line).
 	for i := range m.commits {
 		if countCat(out, gsCommit) >= gsCommitCap {
 			break
 		}
 		c := &m.commits[i]
-		if strings.Contains(strings.ToLower(c.Subject), lq) || strings.Contains(strings.ToLower(c.Body), lq) {
+		if strings.Contains(strings.ToLower(c.Subject), lq) ||
+			strings.Contains(strings.ToLower(c.Body), lq) ||
+			strings.Contains(strings.ToLower(c.Author), lq) ||
+			strings.Contains(strings.ToLower(c.AuthorEmail), lq) {
 			r := gsResult{cat: gsCommit, title: c.Subject, sub: c.Short + " · " + c.Author + " · " + c.Date, sha: c.SHA}
 			if rg := matchRanges(c.Subject, q); len(rg) > 0 {
 				r.hit = [2]int{rg[0][0], rg[0][1]}

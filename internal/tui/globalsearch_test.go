@@ -1,6 +1,10 @@
 package tui
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/trebaud/diffcat/internal/git"
+)
 
 // TestGlobalSearchGrouping checks that one query is matched across commits, files,
 // and code, that the hits come back grouped in category order, and that each
@@ -63,5 +67,22 @@ func TestGlobalSearchGrouping(t *testing.T) {
 	}
 	if n := countCat(results, gsCode); n > gsCodeCap {
 		t.Errorf("code hits %d exceed cap %d", n, gsCodeCap)
+	}
+}
+
+// TestGlobalSearchByAuthor checks that a query matching only an author's name
+// (not any subject, body, file, or code) still surfaces that author's commits.
+func TestGlobalSearchByAuthor(t *testing.T) {
+	m := logSampleModel()
+	m.gsFiles = []git.FileChange{}
+	m.gsCode = []gsCodeLine{}
+
+	m.gsInput = "hopper" // only Grace Hopper's commit carries this
+	results := m.gsResults()
+	if countCat(results, gsCommit) != 1 {
+		t.Fatalf("author query 'hopper' should match exactly one commit, got %d", countCat(results, gsCommit))
+	}
+	if results[0].sha != "bbb222full" {
+		t.Errorf("author query should surface Grace Hopper's commit, got %q", results[0].sha)
 	}
 }
