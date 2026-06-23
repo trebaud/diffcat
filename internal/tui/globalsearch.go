@@ -53,9 +53,11 @@ type gsResult struct {
 }
 
 // Per-category caps keep the overlay a glanceable summary rather than an
-// unbounded dump; the most useful hits (commits, then files) lead.
+// unbounded dump; the most useful hits (commits, then files) lead. The commit cap
+// is generous because the list scrolls and an author search ("show me everyone's
+// commits by X") legitimately wants the whole set, not a teaser of five.
 const (
-	gsCommitCap = 5
+	gsCommitCap = 50
 	gsFileCap   = 5
 	gsCodeCap   = 8
 )

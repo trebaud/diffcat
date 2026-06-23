@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"image/color"
 	"strconv"
 	"strings"
@@ -14,9 +15,11 @@ import (
 // three read as one idiom; the extra wrinkle here is the non-selectable header
 // rows (each with a category glyph + count) and the blank spacers between groups.
 
-// gsRows is how many content rows (headers + spacers + results) the overlay shows
-// at once.
-const gsRows = 12
+// gsPageSize is how many results one page of the overlay shows. The list
+// paginates rather than scrolling continuously, so a large result set — every
+// commit by one author, say — is walked a page at a time with ←/→ instead of
+// scrolled past one row at a time.
+const gsPageSize = 8
 
 // gsRow is one rendered line in the list: a category header (header set, with cat
 // naming the group), a blank spacer between groups (spacer set), or a result (res
@@ -30,9 +33,10 @@ type gsRow struct {
 }
 
 // gsLayout interleaves category headers (and a blank spacer before each group
-// after the first) between the grouped results, yielding the flat row list the
-// overlay renders and windows over.
-func gsLayout(results []gsResult) []gsRow {
+// after the first) between one page's results, yielding the flat row list the
+// overlay renders. base is the page's first result's index in the full result
+// list, so each row's idx stays global (the selection and activation key off it).
+func gsLayout(results []gsResult, base int) []gsRow {
 	rows := []gsRow{}
 	last := gsCategory(-1)
 	for i, r := range results {
@@ -43,7 +47,7 @@ func gsLayout(results []gsResult) []gsRow {
 			rows = append(rows, gsRow{header: r.cat.label(), cat: r.cat})
 			last = r.cat
 		}
-		rows = append(rows, gsRow{res: r, idx: i})
+		rows = append(rows, gsRow{res: r, idx: base + i})
 	}
 	return rows
 }
@@ -76,11 +80,11 @@ func (c gsCategory) tint() color.Color {
 	return colMuted
 }
 
-// globalSearchBox builds the overlay as a floating window: a prompt line, a hint,
-// then the windowed, grouped result list with a key-hint footer.
+// globalSearchBox builds the overlay as a floating window: a prompt line, a hint
+// (the match count and current page), then one page of the grouped result list
+// with a key-hint footer.
 func (m model) globalSearchBox() string {
 	results := m.gsResults()
-	rows := gsLayout(results)
 	w := m.width - 6
 	if w > 64 {
 		w = 64
@@ -93,25 +97,39 @@ func (m model) globalSearchBox() string {
 	for _, r := range results {
 		counts[r.cat]++
 	}
+	total := len(results)
 
+	// The page is derived from the selected result, so ↑/↓ flow across page edges
+	// while ←/→ jump a whole page (see the key handler). Clamp a stale selection
+	// (the query just changed) back into range.
+	pageCount := 1
+	if total > 0 {
+		pageCount = (total + gsPageSize - 1) / gsPageSize
+	}
 	sel := m.gsSel
-	if sel >= len(results) {
-		sel = max(0, len(results)-1)
+	if sel >= total {
+		sel = max(0, total-1)
 	}
+	page := min(sel/gsPageSize, pageCount-1)
+	start := page * gsPageSize
+	stop := min(start+gsPageSize, total)
+	rows := gsLayout(results[start:stop], start)
 
-	// Window the rows around the selected result so it stays visible as the list
-	// scrolls past gsRows.
-	selRow := selectedDisplayRow(rows, sel)
-	offset := 0
-	if selRow >= gsRows {
-		offset = selRow - gsRows + 1
+	// Reserve a stable result-area height: one full page plus the most chrome this
+	// query's pages can carry (a header per category present, a spacer between), so
+	// the box doesn't jump from page to page.
+	pageRows := gsPageSize
+	if cats := len(counts); cats > 0 {
+		pageRows += cats + (cats - 1)
 	}
-	end := min(offset+gsRows, len(rows))
 
 	ob := lipgloss.NewStyle().Background(colOverlayBg)
 	hint := "search commits · files · code"
-	if len(results) > 0 {
-		hint = pluralMatches(len(results))
+	if total > 0 {
+		hint = pluralMatches(total)
+		if pageCount > 1 {
+			hint += fmt.Sprintf("  ·  page %d/%d", page+1, pageCount)
+		}
 	}
 	lines := []string{
 		padOverlay(ob.Foreground(colSelect).Bold(true).Render("⌕ ")+ob.Render(m.gsInput)+ob.Foreground(colSelect).Bold(true).Render("▌"), w),
@@ -120,12 +138,11 @@ func (m model) globalSearchBox() string {
 	}
 	if strings.TrimSpace(m.gsInput) == "" {
 		lines = append(lines, padOverlay(ob.Foreground(colMuted).Render("  type to search across the repo"), w))
-	} else if len(results) == 0 {
+	} else if total == 0 {
 		lines = append(lines, padOverlay(ob.Foreground(colMuted).Render("  no matches"), w))
 	}
 	shown := 0
-	for i := offset; i < end; i++ {
-		r := rows[i]
+	for _, r := range rows {
 		switch {
 		case r.spacer:
 			lines = append(lines, padOverlay("", w))
@@ -136,14 +153,13 @@ func (m model) globalSearchBox() string {
 		}
 		shown++
 	}
-	// Pad to a stable height so the box doesn't jump as the result count changes.
-	for ; shown < gsRows; shown++ {
+	for ; shown < pageRows; shown++ {
 		lines = append(lines, padOverlay("", w))
 	}
 	// Key-hint footer, set off from the list by a blank line.
 	lines = append(lines,
 		padOverlay("", w),
-		padOverlay(ob.Foreground(colMuted).Render("  ↵ open   ↑↓ move   esc close"), w),
+		padOverlay(ob.Foreground(colMuted).Render("  ↵ open   ↑↓ move   ←→ page   esc close"), w),
 	)
 	return floatingBox(strings.Join(lines, "\n"))
 }
@@ -173,17 +189,6 @@ func gsHeaderRow(cat gsCategory, count, width int) string {
 	}
 	row := ob.Render("  ") + glyph + ob.Render(" ") + label + ob.Render(strings.Repeat(" ", gap)) + cnt
 	return padOverlay(row, width)
-}
-
-// selectedDisplayRow returns the index of the selected result within the
-// interleaved row list (headers and spacers shift result positions down), or 0.
-func selectedDisplayRow(rows []gsRow, sel int) int {
-	for i, r := range rows {
-		if r.header == "" && !r.spacer && r.idx == sel {
-			return i
-		}
-	}
-	return 0
 }
 
 // gsResultRow renders one hit: a caret column (filled ▸ only when selected, so

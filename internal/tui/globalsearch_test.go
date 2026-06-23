@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/trebaud/diffcat/internal/git"
@@ -84,5 +86,42 @@ func TestGlobalSearchByAuthor(t *testing.T) {
 	}
 	if results[0].sha != "bbb222full" {
 		t.Errorf("author query should surface Grace Hopper's commit, got %q", results[0].sha)
+	}
+}
+
+// TestGlobalSearchPagination checks that a result set larger than one page reports
+// its page count and that the rendered overlay follows the selection onto the
+// last page.
+func TestGlobalSearchPagination(t *testing.T) {
+	m := logSampleModel()
+	m.commits = nil
+	for i := 0; i < gsPageSize*2+1; i++ { // spans three pages
+		m.commits = append(m.commits, git.Commit{
+			SHA:     fmt.Sprintf("sha%02dfull", i),
+			Short:   fmt.Sprintf("sha%02d", i),
+			Author:  "Ada Lovelace",
+			Date:    "2026-05-29",
+			Subject: fmt.Sprintf("commit number %d", i),
+		})
+	}
+	m.baseStart = len(m.commits)
+	m.gsFiles = []git.FileChange{}
+	m.gsCode = []gsCodeLine{}
+	m.gsInput = "ada" // matches every commit's author
+	m.width, m.height = 120, 40
+
+	results := m.gsResults()
+	if len(results) != gsPageSize*2+1 {
+		t.Fatalf("want %d author matches, got %d", gsPageSize*2+1, len(results))
+	}
+	pageCount := (len(results) + gsPageSize - 1) / gsPageSize
+
+	if out := m.globalSearchBox(); !strings.Contains(out, fmt.Sprintf("page 1/%d", pageCount)) {
+		t.Errorf("first page should report page 1/%d:\n%s", pageCount, out)
+	}
+	// Selecting the last result should render the last page.
+	m.gsSel = len(results) - 1
+	if out := m.globalSearchBox(); !strings.Contains(out, fmt.Sprintf("page %d/%d", pageCount, pageCount)) {
+		t.Errorf("selecting the last result should show page %d/%d", pageCount, pageCount)
 	}
 }
