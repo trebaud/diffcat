@@ -131,13 +131,13 @@ func (m model) globalSearchBox() string {
 	stop := min(start+ps, total)
 	rows := gsLayout(results[start:stop], start)
 
-	// Reserve a stable result-area height: one full page plus the most chrome this
-	// query's pages can carry (a header per category present, a spacer between), so
-	// the box doesn't jump from page to page.
-	pageRows := ps
-	if cats := len(counts); cats > 0 {
-		pageRows += cats + (cats - 1)
-	}
+	// The result area is a fixed height — one full page plus the most chrome any
+	// query can carry (a header for each of the three categories and a spacer
+	// between them) — so the box never resizes to fit its contents. Short pages,
+	// single-category results, and the empty / no-match states all pad to the same
+	// height rather than shrinking the box.
+	const gsChromeRows = 3 + 2 // 3 category headers, 2 spacers
+	pageRows := ps + gsChromeRows
 
 	ob := lipgloss.NewStyle().Background(colOverlayBg)
 	hint := "search commits · files · code"
@@ -152,12 +152,16 @@ func (m model) globalSearchBox() string {
 		padOverlay(ob.Foreground(colMuted).Render(hint), w),
 		padOverlay("", w),
 	}
+	// Status line for the empty / no-match states, counted against the fixed
+	// result-area budget so those states stay the same height as a full page.
+	shown := 0
 	if strings.TrimSpace(m.gsInput) == "" {
 		lines = append(lines, padOverlay(ob.Foreground(colMuted).Render("  type to search across the repo"), w))
+		shown++
 	} else if total == 0 {
 		lines = append(lines, padOverlay(ob.Foreground(colMuted).Render("  no matches"), w))
+		shown++
 	}
-	shown := 0
 	for _, r := range rows {
 		switch {
 		case r.spacer:
