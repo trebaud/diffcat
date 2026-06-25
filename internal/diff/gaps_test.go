@@ -51,6 +51,17 @@ func TestGaps(t *testing.T) {
 			want: []gapNew{{3, 9}, {12, 15}},
 		},
 		{
+			name: "section heading with +/- tokens does not corrupt the range",
+			// git appends surrounding-context text after the second @@; here it
+			// ends in "+" and contains "EP-001". Neither must be misread as a
+			// range, which would zero the start and drop the leading gap.
+			raw: "diff --git a/f b/f\n--- a/f\n+++ b/f\n" +
+				"@@ -321,2 +321,3 @@ Each epic is demoable: EP-001 signup/login +\n ctx\n+inserted\n ctx\n",
+			newLines: 330,
+			// leading new 1..320 before the hunk, trailing new 324..330 after it
+			want: []gapNew{{1, 320}, {324, 330}},
+		},
+		{
 			name: "hunk ending on adds keeps old/new aligned",
 			raw: "diff --git a/f b/f\n--- a/f\n+++ b/f\n" +
 				"@@ -5,1 +5,3 @@\n ctx5\n+x\n+y\n" +

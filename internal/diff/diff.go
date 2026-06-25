@@ -461,6 +461,18 @@ func clampReveal(top, bottom, total int) (int, int) {
 
 func parseHunk(s string) (oldStart, newStart int) {
 	oldStart, newStart = 1, 1
+	// A hunk header is "@@ -old +new @@ <section heading>". Only the range
+	// between the two @@ markers is numeric; the trailing heading is git's
+	// surrounding-context text and may contain +/- tokens (e.g. a markdown
+	// line ending in "+") that would otherwise be misread as a range and
+	// clobber the start, corrupting line numbers and dropping the gap.
+	if i := strings.Index(s, "@@"); i >= 0 {
+		rest := s[i+len("@@"):]
+		if j := strings.Index(rest, "@@"); j >= 0 {
+			rest = rest[:j]
+		}
+		s = rest
+	}
 	for _, p := range strings.Fields(s) {
 		switch {
 		case strings.HasPrefix(p, "-"):
