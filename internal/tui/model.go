@@ -202,6 +202,13 @@ type model struct {
 	// fire a spurious refresh.
 	syncFingerprint string
 
+	// commitListSynced is the syncFingerprint the history list was last loaded
+	// against. Returning to the list from a mode that covered it (a per-commit
+	// drill-in, the dashboard) only needs to reload when the fingerprint has moved
+	// since — otherwise the list is already current and the costly git log
+	// (BranchHistory) on the way back is pure latency. See reloadCommitList.
+	commitListSynced string
+
 	showHelp bool
 
 	// Command palette (`:`). showPalette gates the floating action picker;

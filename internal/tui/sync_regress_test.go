@@ -120,6 +120,30 @@ func TestSyncShowsCommitMadeWhileDrilledIntoCommit(t *testing.T) {
 	}
 }
 
+// TestExitCommitSkipsReloadWhenUnchanged locks in the perf fix: returning to the
+// history list when nothing has changed in the repo must not re-run the costly
+// BranchHistory reload. loadCommits drops the per-commit diff cache, so a surviving
+// cache entry across the exit proves the reload was skipped.
+func TestExitCommitSkipsReloadWhenUnchanged(t *testing.T) {
+	repo := initSyncRepo(t)
+	m := newSyncModel(t, repo)
+	m.enterLog() // seeds commitListSynced against the current fingerprint
+	if c := m.selectedCommit(); c == nil {
+		t.Fatalf("no commit under the cursor to drill into")
+	}
+	m.enterCommit()
+
+	// Seed a cache entry; a reload via loadCommits would wipe the whole map.
+	const sentinel = "sentinel-sha"
+	m.commitDiffCache[sentinel] = nil
+
+	m.exitCommit() // no repo change, no poll → fingerprint unmoved → reload skipped
+
+	if _, ok := m.commitDiffCache[sentinel]; !ok {
+		t.Fatalf("exitCommit reloaded the history list despite no git change (diff cache was dropped)")
+	}
+}
+
 // TestSyncShowsCommitMadeWhileInLog is the control: the common path (committing
 // while sitting in the plain log) still surfaces the new commit on the next poll.
 func TestSyncShowsCommitMadeWhileInLog(t *testing.T) {

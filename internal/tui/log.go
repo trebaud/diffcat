@@ -78,6 +78,7 @@ func (m model) detailsCommit() *git.Commit {
 func (m *model) enterLog() {
 	m.loadCommits()
 	m.refreshWorkingCount()
+	m.commitListSynced = m.syncFingerprint
 	m.mode = viewLog
 	m.focus = focusFiles
 	m.commitCursor = 0
@@ -235,6 +236,13 @@ func (m *model) loadCommits() {
 // reload — so without reloading here, a commit made while that mode covered the
 // list would never appear, since later polls see no fingerprint change to act on.
 func (m *model) reloadCommitList() {
+	// The list already reflects the current git state — skip the costly reload (a
+	// full BranchHistory `git log`) so returning to it from a drill-in or the
+	// dashboard is instant. A landed commit moves syncFingerprint via the
+	// background poll, which then drives a real reload through refresh.
+	if m.commitListSynced == m.syncFingerprint && m.commits != nil {
+		return
+	}
 	wasWorking := m.onWorkingRow()
 	prevSHA := ""
 	if c := m.selectedCommit(); c != nil {
@@ -242,6 +250,7 @@ func (m *model) reloadCommitList() {
 	}
 	m.loadCommits()
 	m.refreshWorkingCount()
+	m.commitListSynced = m.syncFingerprint
 	// Keep the reader on the working-tree row when it's still present; otherwise
 	// re-find the same commit by SHA across any newer commits added on top.
 	if wasWorking && m.logWorking {
