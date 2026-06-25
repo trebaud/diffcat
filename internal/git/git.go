@@ -163,12 +163,13 @@ func (c Commit) coAuthorTrailers() string {
 // HEAD sits on the base/default branch itself — it falls back to HEAD's full
 // history so the view always has something to show.
 func Commits(repo, base string) ([]Commit, error) {
-	commits, err := commitLog(repo, base+"..HEAD")
+	remotes := remoteNames(repo)
+	commits, err := commitLog(repo, remotes, base+"..HEAD")
 	if err != nil {
 		return nil, err
 	}
 	if len(commits) == 0 {
-		return commitLog(repo, "HEAD")
+		return commitLog(repo, remotes, "HEAD")
 	}
 	return commits, nil
 }
@@ -184,15 +185,19 @@ func Commits(repo, base string) ([]Commit, error) {
 // branch itself there is nothing to delineate: the slice is HEAD's full history
 // and baseStart is -1.
 func BranchHistory(repo, base string, limit int) (commits []Commit, baseStart int, err error) {
-	own, err := commitLog(repo, base+"..HEAD")
+	// Resolve the configured remotes once and thread them through every walk —
+	// commitLog would otherwise shell `git remote` afresh on each of the (up to
+	// two) calls below.
+	remotes := remoteNames(repo)
+	own, err := commitLog(repo, remotes, base+"..HEAD")
 	if err != nil {
 		return nil, -1, err
 	}
 	if len(own) == 0 {
-		full, err := commitLog(repo, "HEAD")
+		full, err := commitLog(repo, remotes, "HEAD")
 		return full, -1, err
 	}
-	baseHist, err := commitLog(repo, fmt.Sprintf("--max-count=%d", limit), base)
+	baseHist, err := commitLog(repo, remotes, fmt.Sprintf("--max-count=%d", limit), base)
 	if err != nil || len(baseHist) == 0 {
 		return own, -1, err
 	}
@@ -200,8 +205,9 @@ func BranchHistory(repo, base string, limit int) (commits []Commit, baseStart in
 }
 
 // commitLog runs `git log` with the given trailing args (a rev-range and any
-// limiting flags) and parses the result.
-func commitLog(repo string, args ...string) ([]Commit, error) {
+// limiting flags) and parses the result. remotes (the configured remote names)
+// is passed in so a multi-call walk resolves it once rather than per call.
+func commitLog(repo string, remotes map[string]bool, args ...string) ([]Commit, error) {
 	// Unit/record separators (US 0x1f / RS 0x1e) frame the fields so subjects
 	// with spaces or punctuation parse unambiguously. The body (%b) is last so
 	// its embedded newlines can't be mistaken for a field separator. %D carries
@@ -213,7 +219,7 @@ func commitLog(repo string, args ...string) ([]Commit, error) {
 	if err != nil {
 		return nil, fmt.Errorf("git log failed: %w", err)
 	}
-	return parseCommits(out, remoteNames(repo)), nil
+	return parseCommits(out, remotes), nil
 }
 
 // remoteNames returns the set of configured remote names (e.g. {"origin"}), used
@@ -1191,12 +1197,69 @@ func (h HistoryStats) Concentration() (topPct, authorsForMajority int) {
 	return topPct, authorsForMajority
 }
 
-// Shortstat returns a one-line summary of the whole diff against base, e.g.
-// "5 files changed, 120 insertions(+), 30 deletions(-)". Empty when clean.
-func Shortstat(repo, base string) string {
-	out, err := exec.Command("git", "-C", repo, "diff", "--shortstat", base).Output()
-	if err != nil {
+// ShortstatOf renders the one-line diff summary — the same shape as
+// `git diff --shortstat`, e.g. "5 files changed, 120 insertions(+), 30
+// deletions(-)" — from an already-computed change list, so the header summary
+// costs no extra git call (the counts ride the numstat ChangedFiles already
+// ran). Binary files (Added/Deleted < 0) count toward the file total but
+// contribute no line counts, matching git. Empty when there are no changes.
+func ShortstatOf(files []FileChange) string {
+	if len(files) == 0 {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	ins, del := 0, 0
+	for _, f := range files {
+		if f.Added > 0 {
+			ins += f.Added
+		}
+		if f.Deleted > 0 {
+			del += f.Deleted
+		}
+	}
+	parts := []string{plural(len(files), "file") + " changed"}
+	if ins > 0 {
+		parts = append(parts, plural(ins, "insertion")+"(+)")
+	}
+	if del > 0 {
+		parts = append(parts, plural(del, "deletion")+"(-)")
+	}
+	return strings.Join(parts, ", ")
+}
+
+// plural formats "1 file" / "3 files" — the singular/plural shape git's
+// shortstat uses for its file, insertion, and deletion counts.
+func plural(n int, word string) string {
+	if n == 1 {
+		return "1 " + word
+	}
+	return strconv.Itoa(n) + " " + word + "s"
+}
+
+// WorkingCount returns how many files differ from HEAD (staged + unstaged +
+// untracked) — the same set ChangedFiles(repo, "HEAD") enumerates, but counted
+// with `diff --name-only` plus the untracked listing alone, so it skips the
+// second (numstat) diff and the content read of every untracked file that a
+// full ChangedFiles incurs. It backs the history view's working-tree row, which
+// only needs the count, not the files themselves.
+func WorkingCount(repo string) int {
+	n := 0
+	if out, err := exec.Command("git", "-C", repo, "diff", "--name-only", "HEAD").Output(); err == nil {
+		n += nonEmptyLines(out)
+	}
+	if out, err := exec.Command("git", "-C", repo, "ls-files", "--others", "--exclude-standard").Output(); err == nil {
+		n += nonEmptyLines(out)
+	}
+	return n
+}
+
+// nonEmptyLines counts the non-blank newline-separated lines in git output —
+// i.e. one per path in a `--name-only` / `ls-files` listing.
+func nonEmptyLines(out []byte) int {
+	n := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line != "" {
+			n++
+		}
+	}
+	return n
 }

@@ -55,11 +55,11 @@ func commitInRepo(t *testing.T, repo, msg string) string {
 func newSyncModel(t *testing.T, repo string) model {
 	t.Helper()
 	base := git.BaseRef(repo, "main")
-	files, err := git.ChangedFiles(repo, base)
-	if err != nil {
-		t.Fatalf("ChangedFiles: %v", err)
-	}
-	m := newModel(repo, base, "main", true, "main", files, git.Shortstat(repo, base), resolved{reduceMotion: true})
+	m := newModel(repo, base, "main", true, resolved{reduceMotion: true})
+	// Drive the same async startup the running program does: the background gather
+	// lands as a startupMsg, which seeds the model out of its loading state.
+	next, _ := m.Update(startupMsg{su: gatherStartup(repo, base, "main")})
+	m = next.(model)
 	m.mode = viewLog
 	return m
 }

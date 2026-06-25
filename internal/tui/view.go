@@ -39,6 +39,11 @@ func (m model) render() string {
 	if m.width == 0 || m.height == 0 {
 		return "loading…"
 	}
+	// Until the background startup gather lands (startupMsg → applyStartup) there's
+	// no data to render — show a loading screen rather than an empty two-pane split.
+	if m.loading {
+		return m.loadingView()
+	}
 	if m.width < minWidth || m.height < minHeight {
 		return m.tooSmallView()
 	}
@@ -736,6 +741,29 @@ func truncatePath(path string, max int) string {
 	}
 	r := []rune(path)
 	return "…" + string(r[len(r)-(max-1):])
+}
+
+// loadingView is the very first frame: a centered title shown while the
+// background startup gather (change list + history + status) runs. A braille
+// spinner animates with animFrame unless motion is reduced. Deferring the heavy
+// git work off the launch path is what lets this paint instantly even on a very
+// large repo, instead of a multi-second blank stall.
+func (m model) loadingView() string {
+	frame := "·"
+	if !m.reduceMotion {
+		spin := []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+		frame = spin[m.animFrame%len(spin)]
+	}
+	line := titleStyle.Render("diffcat") + "   " + mutedStyle.Render(frame+" reading repository…")
+	left := (m.width - lipgloss.Width(line)) / 2
+	if left < 0 {
+		left = 0
+	}
+	top := (m.height - 1) / 2
+	if top < 0 {
+		top = 0
+	}
+	return strings.Repeat("\n", top) + strings.Repeat(" ", left) + line
 }
 
 func (m model) tooSmallView() string {

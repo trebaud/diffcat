@@ -43,6 +43,18 @@ func syncCmd(repo, baseName string) tea.Cmd {
 	})
 }
 
+// startupMsg carries the result of the background launch gather — the change
+// list, history, status fingerprint, and working count — computed off the render
+// path so the first frame can paint a loading screen immediately. applyStartup
+// seeds the model from it and drops out of the loading state.
+type startupMsg struct{ su startup }
+
+// startupCmd runs the heavy launch git work in the background (see gatherStartup),
+// landing as a startupMsg. Kicked from Init.
+func startupCmd(repo, base, baseName string) tea.Cmd {
+	return func() tea.Msg { return startupMsg{su: gatherStartup(repo, base, baseName)} }
+}
+
 // historyMsg carries the result of a background whole-history computation. It
 // shells `git log --numstat` over every commit reachable from HEAD, which can
 // take a second or two on a deep history — so it runs off the UI thread and lands
@@ -114,6 +126,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clampDiffOffset()
 		m.clampDiffCursor()
 		m.ensureCursorVisible()
+		return m, nil
+
+	case startupMsg:
+		// The background launch gather landed: seed the model and drop the loading
+		// screen. A WindowSizeMsg has almost certainly already set width/height, so
+		// the next render shows the populated view immediately.
+		m.applyStartup(msg.su)
 		return m, nil
 
 	case tickMsg:
@@ -193,6 +212,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case gitStateMsg:
+		// While the initial gather is still in flight the model has no data to
+		// refresh against (and applyStartup will seed the fingerprint baseline), so
+		// just keep the poll alive without firing a spurious refresh.
+		if m.loading {
+			return m, syncCmd(m.repo, m.baseName)
+		}
 		// Only do the (more expensive) refresh when the cheap fingerprint moved;
 		// otherwise the poll is a no-op beyond re-arming itself.
 		if msg.fingerprint != m.syncFingerprint {
@@ -216,6 +241,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// While the initial gather is still loading there's nothing to act on yet —
+	// only honor quit so the reader is never trapped on the loading screen.
+	if m.loading {
+		switch msg.String() {
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+
 	// Once the reader touches a key, retire the first-run hint (it also auto-fades);
 	// the keypress itself still goes on to act.
 	m.showToast = false
@@ -877,7 +912,6 @@ func abs(n int) int {
 // change — only genuinely new content resets the view.
 func (m *model) refresh() {
 	m.base = git.BaseRef(m.repo, m.baseName)
-	m.shortstat = git.Shortstat(m.repo, m.base)
 	// Drop the global-search corpora so the next search rebuilds them against the
 	// refreshed working tree rather than a stale snapshot.
 	m.gsFiles = nil
@@ -935,6 +969,10 @@ func (m *model) refresh() {
 	}
 	if files, err := git.ChangedFiles(m.repo, m.base); err == nil {
 		m.files = files
+		// The header summary rides the counts the change list already carries — no
+		// extra `git diff --shortstat`. Only the branch/log views (this fall-through
+		// path) display it; viewCommit/viewOverview returned earlier and leave it.
+		m.shortstat = git.ShortstatOf(files)
 		m.rebuildTree()
 		m.reselectPath(prevPath)
 		m.flagChangedFiles()

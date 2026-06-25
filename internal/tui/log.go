@@ -78,6 +78,25 @@ func (m model) detailsCommit() *git.Commit {
 func (m *model) enterLog() {
 	m.loadCommits()
 	m.refreshWorkingCount()
+	m.finishEnterLog()
+}
+
+// seedLog enters the history view from values gathered concurrently at launch
+// (see gatherStartup) rather than loading them here, so the cold-start path
+// doesn't re-run BranchHistory/WorkingCount serially. It mirrors what enterLog's
+// loadCommits + refreshWorkingCount would have produced.
+func (m *model) seedLog(commits []git.Commit, baseStart, workingCount int) {
+	m.commits = commits
+	m.baseStart = baseStart
+	m.commitDiffCache = map[string][]diff.Line{}
+	m.workingCount = workingCount
+	m.logWorking = workingCount > 0
+	m.finishEnterLog()
+}
+
+// finishEnterLog sets the view state shared by enterLog and seedLog once the
+// commit list and working count are in place.
+func (m *model) finishEnterLog() {
 	m.commitListSynced = m.syncFingerprint
 	m.mode = viewLog
 	m.focus = focusFiles
@@ -105,15 +124,13 @@ func (m *model) closeLogDiff() {
 
 // refreshWorkingCount recomputes the uncommitted-change count (against HEAD) and
 // pins/unpins the working-tree row accordingly. It counts the same files the row
-// drills into (git.ChangedFiles against HEAD: staged + unstaged + untracked), so
-// the row appears only when the working tree actually has changes — not merely
-// because the feature branch differs from its base.
+// drills into (against HEAD: staged + unstaged + untracked) via git.WorkingCount,
+// which counts without the numstat diff and per-file content reads a full
+// ChangedFiles would do — the row only needs the number. The row appears only
+// when the working tree actually has changes, not merely because the feature
+// branch differs from its base.
 func (m *model) refreshWorkingCount() {
-	if files, err := git.ChangedFiles(m.repo, "HEAD"); err == nil {
-		m.workingCount = len(files)
-	} else {
-		m.workingCount = 0
-	}
+	m.workingCount = git.WorkingCount(m.repo)
 	m.logWorking = m.workingCount > 0
 }
 

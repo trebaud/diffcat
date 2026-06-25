@@ -56,6 +56,12 @@ type model struct {
 	sidebar  sidebarSize // left-pane width: hidden / normal / wide (`[` / `]`)
 	pendingG bool        // first half of the `gg` chord was pressed
 
+	// loading is true between launch and the moment the background startup gather
+	// lands (startupMsg). While set, View shows a loading screen and key handling
+	// is inert — there's no data to act on yet. Resolving the heavy git work off
+	// the launch path is what makes the first frame paint instantly on a big repo.
+	loading bool
+
 	repo          string
 	base          string // ref the diff is computed against (merge base of master/HEAD)
 	baseName      string // human label for the base branch
@@ -294,16 +300,15 @@ type model struct {
 	err error
 }
 
-func newModel(repo, base, baseName string, baseIsDefault bool, branch string, files []git.FileChange, shortstat string, r resolved) model {
+func newModel(repo, base, baseName string, baseIsDefault bool, r resolved) model {
 	m := model{
+		loading:         true,
+		mode:            viewLog,
 		sidebar:         sidebarNormal,
 		repo:            repo,
 		base:            base,
 		baseName:        baseName,
 		baseIsDefault:   baseIsDefault,
-		branch:          branch,
-		shortstat:       shortstat,
-		files:           files,
 		collapsed:       map[string]bool{},
 		commitDiffCache: map[string][]diff.Line{},
 		baseStart:       -1,
@@ -312,8 +317,7 @@ func newModel(repo, base, baseName string, baseIsDefault bool, branch string, fi
 		iconSet:         r.iconSet,
 		reduceMotion:    r.reduceMotion,
 		ticking:         !r.reduceMotion,
-		syncFingerprint: git.Fingerprint(repo, baseName),
-		fileSig:         fileSignatures(files),
+		fileSig:         map[string]string{},
 		unseen:          map[string]bool{},
 		unseenAt:        map[string]int{},
 
@@ -331,13 +335,26 @@ func newModel(repo, base, baseName string, baseIsDefault bool, branch string, fi
 		m.firstRunDone = true
 	}
 
-	m.rebuildTree()
-	// diffcat always opens on the branch's commit history — the timeline of what
-	// changed, on the default branch or a feature branch alike. The aggregated
-	// branch-vs-base diff (the file tree + diff) is one `D` away, and loads lazily
-	// then (exitLog → loadDiff), so we don't parse it eagerly at startup.
-	m.enterLog()
+	// The heavy git work (change list, history, status) is gathered off the launch
+	// path by startupCmd and seeded via applyStartup when its startupMsg lands, so
+	// the first frame is a loading screen rather than a blank stall.
 	return m
+}
+
+// applyStartup seeds the model from the background launch gather (startupMsg) and
+// drops out of the loading state. It mirrors what newModel used to do inline,
+// just deferred so the first frame can paint first. diffcat opens on the branch's
+// commit history; the aggregated branch-vs-base diff (file tree + per-file diff)
+// is one `D` away and loads lazily then (exitLog → loadDiff).
+func (m *model) applyStartup(su startup) {
+	m.loading = false
+	m.branch = su.branch
+	m.files = su.files
+	m.shortstat = git.ShortstatOf(su.files)
+	m.syncFingerprint = su.fingerprint
+	m.fileSig = fileSignatures(su.files)
+	m.rebuildTree()
+	m.seedLog(su.commits, su.baseStart, su.workingCount)
 }
 
 // fileSig is a cheap per-file change signature — the status letter plus its
@@ -443,12 +460,15 @@ func (m model) selectedRow() *treeRow {
 }
 
 func (m model) Init() tea.Cmd {
+	// startupCmd does the heavy launch git work off the render path, so the first
+	// frame is the loading screen rather than a blank stall (see newModel).
+	start := startupCmd(m.repo, m.base, m.baseName)
 	// Reduce-motion freezes every animation, so there's no need for the recurring
 	// tick — only the background git-state poll keeps running.
 	if m.reduceMotion {
-		return syncCmd(m.repo, m.baseName)
+		return tea.Batch(start, syncCmd(m.repo, m.baseName))
 	}
-	return tea.Batch(tickCmd(tickSlow), syncCmd(m.repo, m.baseName))
+	return tea.Batch(start, tickCmd(tickSlow), syncCmd(m.repo, m.baseName))
 }
 
 // selectedFile returns the file under the cursor, or nil when the cursor is on a
