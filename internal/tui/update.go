@@ -55,6 +55,23 @@ func startupCmd(repo, base, baseName string) tea.Cmd {
 	return func() tea.Msg { return startupMsg{su: gatherStartup(repo, base, baseName)} }
 }
 
+// fullHistoryMsg carries the complete (uncapped) commit history walked in the
+// background after the capped launch list painted, to be swapped in by Update.
+type fullHistoryMsg struct {
+	commits   []git.Commit
+	baseStart int
+}
+
+// fullHistoryCmd walks the full HEAD-side history (uncapped) off the UI thread —
+// the backfill for the capped launch list. Kicked from applyStartup only when the
+// capped walk was actually truncated, so a short branch never pays for it.
+func fullHistoryCmd(repo, base string) tea.Cmd {
+	return func() tea.Msg {
+		cs, start, _ := git.BranchHistory(repo, base, baseHistoryLimit, 0)
+		return fullHistoryMsg{commits: cs, baseStart: start}
+	}
+}
+
 // historyMsg carries the result of a background whole-history computation. It
 // shells `git log --numstat` over every commit reachable from HEAD, which can
 // take a second or two on a deep history — so it runs off the UI thread and lands
@@ -131,8 +148,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case startupMsg:
 		// The background launch gather landed: seed the model and drop the loading
 		// screen. A WindowSizeMsg has almost certainly already set width/height, so
-		// the next render shows the populated view immediately.
-		m.applyStartup(msg.su)
+		// the next render shows the populated view immediately. applyStartup returns
+		// a backfill command when the capped history list has more commits to load.
+		return m, m.applyStartup(msg.su)
+
+	case fullHistoryMsg:
+		// The background full-history walk completed: swap the capped launch list for
+		// the complete one, holding the reader's place by SHA (and on the working-tree
+		// row when present). Safe in any mode — m.commits isn't repurposed by the
+		// drill-in, and the diff cache is left intact (no re-parse). It reflects the
+		// same git state the launch list did, so commitListSynced is unchanged.
+		wasWorking := m.onWorkingRow()
+		prevSHA := ""
+		if c := m.selectedCommit(); c != nil {
+			prevSHA = c.SHA
+		}
+		m.commits = msg.commits
+		m.baseStart = msg.baseStart
+		if wasWorking && m.logWorking {
+			m.commitCursor = 0
+		} else {
+			m.reselectCommit(prevSHA)
+		}
 		return m, nil
 
 	case tickMsg:

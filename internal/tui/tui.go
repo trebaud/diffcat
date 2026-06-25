@@ -56,8 +56,9 @@ type startup struct {
 	files        []git.FileChange // branch-vs-base change list (the `D` tree + header shortstat)
 	branch       string           // current branch name
 	fingerprint  string           // git.Fingerprint seed for the background sync poll
-	commits      []git.Commit     // history list (base..HEAD + base context)
+	commits      []git.Commit     // history list (base..HEAD + base context), HEAD side capped
 	baseStart    int              // index where base history begins, or -1
+	historyTrunc bool             // the capped HEAD walk hit its limit — more commits exist to backfill
 	workingCount int              // uncommitted-change count (the working-tree row)
 }
 
@@ -72,8 +73,25 @@ func gatherStartup(repo, base, baseName string) startup {
 	go func() { defer wg.Done(); su.files, _ = git.ChangedFiles(repo, base) }()
 	go func() { defer wg.Done(); su.branch = git.CurrentBranch(repo) }()
 	go func() { defer wg.Done(); su.fingerprint = git.Fingerprint(repo, baseName) }()
-	go func() { defer wg.Done(); su.commits, su.baseStart, _ = git.BranchHistory(repo, base, baseHistoryLimit) }()
+	go func() {
+		defer wg.Done()
+		// Cap the HEAD-side walk so the first list paints fast; the full list is
+		// backfilled in the background (see applyStartup → fullHistoryCmd).
+		su.commits, su.baseStart, _ = git.BranchHistory(repo, base, baseHistoryLimit, initialHistoryLimit)
+		su.historyTrunc = headCount(su.commits, su.baseStart) >= initialHistoryLimit
+	}()
 	go func() { defer wg.Done(); su.workingCount = git.WorkingCount(repo) }()
 	wg.Wait()
 	return su
+}
+
+// headCount returns how many of the loaded commits are HEAD-side (the branch's own
+// commits, or all of them in the base-branch case) — i.e. the part the headLimit
+// cap applies to. baseStart marks where the base-context tail begins, or -1 when
+// there is none. Used to tell whether the capped launch walk was truncated.
+func headCount(commits []git.Commit, baseStart int) int {
+	if baseStart >= 0 {
+		return baseStart
+	}
+	return len(commits)
 }

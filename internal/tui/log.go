@@ -231,11 +231,20 @@ func (m *model) exitCommit() {
 // from without dragging in the whole history of a long-lived base like main.
 const baseHistoryLimit = 30
 
+// initialHistoryLimit caps the HEAD-side history walk on the launch path so the
+// first commit list paints fast even on a long-lived base branch with a deep
+// history (where the uncapped walk + per-commit parse is the whole startup cost).
+// The complete list is backfilled in the background right after (fullHistoryCmd →
+// fullHistoryMsg), so nothing is permanently hidden.
+const initialHistoryLimit = 2000
+
 // loadCommits (re)reads the branch's commits plus a slice of the base branch's
 // history below them (recording the boundary in baseStart) and drops the
-// per-commit diff cache so a refresh reflects new history.
+// per-commit diff cache so a refresh reflects new history. It walks the HEAD side
+// uncapped — the launch path uses the capped gather instead (see gatherStartup);
+// this interactive reload wants the complete list.
 func (m *model) loadCommits() {
-	if cs, start, err := git.BranchHistory(m.repo, m.base, baseHistoryLimit); err == nil {
+	if cs, start, err := git.BranchHistory(m.repo, m.base, baseHistoryLimit, 0); err == nil {
 		m.commits = cs
 		m.baseStart = start
 	} else {

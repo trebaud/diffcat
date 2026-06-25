@@ -180,28 +180,44 @@ func Commits(repo, base string) ([]Commit, error) {
 //
 // On a feature branch the slice is the branch's commits (base..HEAD) followed by
 // the base branch's commits at and before the fork point (base and older, capped
-// at limit), and baseStart marks the first of those — the boundary between "what
-// this branch added" and "what it branched from". When HEAD sits on the base
-// branch itself there is nothing to delineate: the slice is HEAD's full history
-// and baseStart is -1.
-func BranchHistory(repo, base string, limit int) (commits []Commit, baseStart int, err error) {
+// at baseLimit), and baseStart marks the first of those — the boundary between
+// "what this branch added" and "what it branched from". When HEAD sits on the base
+// branch itself there is nothing to delineate: the slice is HEAD's history and
+// baseStart is -1.
+//
+// headLimit caps the HEAD-side walk (the branch's own commits, or HEAD's full
+// history in the base-branch case) — 0 means walk it all. On a long-lived base
+// branch the uncapped HEAD walk dominates startup (tens of thousands of commits
+// with the heavy per-commit format), so the launch path passes a cap for a fast
+// first list and backfills the rest in the background; baseLimit caps only the
+// short base-context tail.
+func BranchHistory(repo, base string, baseLimit, headLimit int) (commits []Commit, baseStart int, err error) {
 	// Resolve the configured remotes once and thread them through every walk —
 	// commitLog would otherwise shell `git remote` afresh on each of the (up to
 	// two) calls below.
 	remotes := remoteNames(repo)
-	own, err := commitLog(repo, remotes, base+"..HEAD")
+	own, err := commitLog(repo, remotes, headRev(headLimit, base+"..HEAD")...)
 	if err != nil {
 		return nil, -1, err
 	}
 	if len(own) == 0 {
-		full, err := commitLog(repo, remotes, "HEAD")
+		full, err := commitLog(repo, remotes, headRev(headLimit, "HEAD")...)
 		return full, -1, err
 	}
-	baseHist, err := commitLog(repo, remotes, fmt.Sprintf("--max-count=%d", limit), base)
+	baseHist, err := commitLog(repo, remotes, fmt.Sprintf("--max-count=%d", baseLimit), base)
 	if err != nil || len(baseHist) == 0 {
 		return own, -1, err
 	}
 	return append(own, baseHist...), len(own), nil
+}
+
+// headRev builds the trailing args for a HEAD-side history walk: the rev,
+// preceded by a --max-count cap when limit > 0 (0 walks the whole history).
+func headRev(limit int, rev string) []string {
+	if limit > 0 {
+		return []string{fmt.Sprintf("--max-count=%d", limit), rev}
+	}
+	return []string{rev}
 }
 
 // commitLog runs `git log` with the given trailing args (a rev-range and any

@@ -346,7 +346,11 @@ func newModel(repo, base, baseName string, baseIsDefault bool, r resolved) model
 // just deferred so the first frame can paint first. diffcat opens on the branch's
 // commit history; the aggregated branch-vs-base diff (file tree + per-file diff)
 // is one `D` away and loads lazily then (exitLog → loadDiff).
-func (m *model) applyStartup(su startup) {
+//
+// The seeded history list has its HEAD side capped (initialHistoryLimit) for a
+// fast first paint; when that cap was hit it returns fullHistoryCmd to backfill
+// the complete list in the background (swapped in by fullHistoryMsg).
+func (m *model) applyStartup(su startup) tea.Cmd {
 	m.loading = false
 	m.branch = su.branch
 	m.files = su.files
@@ -355,6 +359,10 @@ func (m *model) applyStartup(su startup) {
 	m.fileSig = fileSignatures(su.files)
 	m.rebuildTree()
 	m.seedLog(su.commits, su.baseStart, su.workingCount)
+	if su.historyTrunc {
+		return fullHistoryCmd(m.repo, m.base)
+	}
+	return nil
 }
 
 // fileSig is a cheap per-file change signature — the status letter plus its
