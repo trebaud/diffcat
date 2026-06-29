@@ -79,12 +79,12 @@ func (m model) paletteActions() []paletteAction {
 			return nil
 		}},
 		{"Refresh from disk", "r", func(m *model) tea.Cmd {
-			m.refresh()
+			repaint := m.refresh()
 			m.syncFingerprint = git.Fingerprint(m.repo, m.baseName)
 			if m.mode == viewOverview || m.mode == viewAuthorDetail {
-				return m.ensureHistory()
+				return tea.Batch(repaint, m.ensureHistory())
 			}
-			return nil
+			return repaint
 		}},
 		{"Show keybindings help", "?", func(m *model) tea.Cmd { m.showHelp = true; return nil }},
 		{"Quit diffcat", "q", func(m *model) tea.Cmd { return tea.Quit }},

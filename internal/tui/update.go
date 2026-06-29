@@ -257,9 +257,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Only do the (more expensive) refresh when the cheap fingerprint moved;
 		// otherwise the poll is a no-op beyond re-arming itself.
+		var repaint tea.Cmd
 		if msg.fingerprint != m.syncFingerprint {
 			m.syncFingerprint = msg.fingerprint
-			m.refresh()
+			repaint = m.refresh()
 		}
 		sync := syncCmd(m.repo, m.baseName)
 		// If the commit that moved invalidated the whole-history stats and the Stats
@@ -267,9 +268,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// live; otherwise leave it for the next open. (refresh only invalidates when
 		// HEAD actually moved.)
 		if m.mode == viewOverview || m.mode == viewAuthorDetail {
-			return m, tea.Batch(sync, m.ensureHistory())
+			return m, tea.Batch(sync, repaint, m.ensureHistory())
 		}
-		return m, sync
+		return m, tea.Batch(sync, repaint)
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -569,12 +570,12 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "r":
-		m.refresh()
+		repaint := m.refresh()
 		m.syncFingerprint = git.Fingerprint(m.repo, m.baseName)
 		if m.mode == viewOverview || m.mode == viewAuthorDetail {
-			return m, m.ensureHistory()
+			return m, tea.Batch(repaint, m.ensureHistory())
 		}
-		return m, nil
+		return m, repaint
 
 	case "S":
 		return m, m.toggleStats()
@@ -947,8 +948,11 @@ func abs(n int) int {
 // same file stays selected by path (the same commit by SHA in history), and diff
 // scroll/cursor/expansion are kept when the visible content didn't actually
 // change — only genuinely new content resets the view.
-func (m *model) refresh() {
+func (m *model) refresh() (repaint tea.Cmd) {
 	m.base = git.BaseRef(m.repo, m.baseName)
+	// Keep the branch label current: a checkout while diffcat is open moves HEAD to
+	// a different branch, and the header reads from m.branch.
+	m.branch = git.CurrentBranch(m.repo)
 	// Drop the global-search corpora so the next search rebuilds them against the
 	// refreshed working tree rather than a stale snapshot.
 	m.gsFiles = nil
@@ -965,6 +969,13 @@ func (m *model) refresh() {
 		// drop the lazy cache so a reopened contributor recomputes against the new HEAD.
 		m.authorModules = map[string][]git.ModuleCount{}
 		m.authorModulesComputing = map[string]bool{}
+		// HEAD moving (a commit, checkout, rebase, or reset) restructures the commit
+		// list and file tree — rows shift, the base divider appears or disappears.
+		// That can trip bubbletea's scroll-diff optimization (e.g. the base tip shows
+		// at a different row across the two frames), which then leaves stale rows on
+		// screen — most visibly an apparently-frozen commit history after switching
+		// branches. Force a clean full repaint so the new state always paints whole.
+		repaint = tea.ClearScreen
 	}
 
 	if m.mode == viewOverview || m.mode == viewAuthorDetail {
@@ -1021,6 +1032,7 @@ func (m *model) refresh() {
 		return
 	}
 	m.preserveDiffView(m.loadDiff)
+	return
 }
 
 // reselectPath moves the tree cursor back onto the row for path after a rebuild,
