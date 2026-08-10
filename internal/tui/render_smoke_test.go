@@ -113,7 +113,10 @@ index 1111111..2222222 100644
 
 func sampleModel() model {
 	m := model{
-		sidebar:       sidebarNormal,
+		sidebar: sidebarNormal,
+		// newModel opens the Stats on the unbounded window; a literal model has to say
+		// so itself (the zero index is the narrowest range).
+		statsRange:    statsRangeAll,
 		baseName:      "master",
 		baseIsDefault: true,
 		branch:        "feature/long-branch-name",
@@ -193,7 +196,9 @@ func detailSampleModel(name string) model {
 	m.historyComputed = true
 	m.historyStats = sampleHistory()
 	m.detailAuthor = name
-	m.authorModules = map[string][]git.ModuleCount{name: m.historyStats.ByAuthor[name].Modules}
+	m.authorModules = map[string][]git.ModuleCount{
+		authorModuleKey(m.statsRange, name): m.historyStats.ByAuthor[name].Modules,
+	}
 	m.authorModulesComputing = map[string]bool{}
 	return m
 }
@@ -251,7 +256,16 @@ func TestRenderNoWrap(t *testing.T) {
 	// is absent and the "analyzing…" note shows in the card.
 	detailLoading := detailSampleModel("Claude")
 	detailLoading.authorModules = map[string][]git.ModuleCount{}
-	detailLoading.authorModulesComputing = map[string]bool{"Claude": true}
+	detailLoading.authorModulesComputing = map[string]bool{authorModuleKey(detailLoading.statsRange, "Claude"): true}
+	// The dashboard and a detail page on a bounded window: the range selector marks a
+	// different tab and every label switches from "repo" to the window.
+	overviewWindowed := overview
+	overviewWindowed.statsRange = 0 // last week
+	detailWindowed := detailSampleModel("Ada Lovelace")
+	detailWindowed.statsRange = 2 // last 6 months
+	// A window with no commits at all (a quiet week) — the empty note names it.
+	overviewWindowEmpty := overviewWindowed
+	overviewWindowEmpty.historyStats = git.HistoryStats{}
 	// A committed diff search, the active search prompt, and the fuzzy file picker.
 	searched := sampleModel()
 	searched.focus = focusDiff
@@ -297,7 +311,7 @@ func TestRenderNoWrap(t *testing.T) {
 	}
 	toast := sampleModel()
 	toast.showToast = true
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, detailAI, detailHuman, detailNoMods, detailLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog, cleanTree, palette, gsearch, toast} {
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, overviewWindowed, overviewWindowEmpty, detailWindowed, detailAI, detailHuman, detailNoMods, detailLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog, cleanTree, palette, gsearch, toast} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -332,7 +346,13 @@ func TestFullScreenFill(t *testing.T) {
 	wideLog.commits[0].Tags = []string{"v1.2.0"}
 	openLog := logSampleModel()
 	openLog.logDiffOpen = true
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, commitSampleModel(), overview, overviewLoading, detailAI, detailHuman, hiddenSidebar, wideLog} {
+	// The same pages on a bounded window: the extra selector row must come out of the
+	// panes, not out of the screen.
+	overviewWindowed := overview
+	overviewWindowed.statsRange = 1 // last month
+	detailWindowed := detailSampleModel("Claude")
+	detailWindowed.statsRange = 3 // last year
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, commitSampleModel(), overview, overviewLoading, overviewWindowed, detailWindowed, detailAI, detailHuman, hiddenSidebar, wideLog} {
 		m.focus = focusDiff
 		for _, split := range []bool{false, true} {
 			m.splitView = split
@@ -505,7 +525,7 @@ func TestAuthorDetailNavigation(t *testing.T) {
 	if cmd == nil {
 		t.Error("enterAuthorDetail should return a command to load the contributor's modules")
 	}
-	if !m.authorModulesComputing[wantName] {
+	if !m.authorModulesComputing[authorModuleKey(m.statsRange, wantName)] {
 		t.Error("enterAuthorDetail should mark the contributor's modules as computing")
 	}
 
@@ -524,6 +544,80 @@ func TestAuthorDetailNavigation(t *testing.T) {
 	notReady.enterAuthorDetail()
 	if notReady.mode == viewAuthorDetail {
 		t.Error("enterAuthorDetail should be a no-op when stats haven't been computed")
+	}
+}
+
+// TestStatsRangeSelection checks the Stats time-window selector: picking a window
+// that hasn't been walked drops back to the loading state and returns a command,
+// a window already walked comes back from the cache with no git call, and the
+// author cursor is re-clamped to the (usually shorter) ranking.
+func TestStatsRangeSelection(t *testing.T) {
+	m := sampleModel()
+	m.mode = viewOverview
+	m.historyComputed = true
+	m.historyStats = sampleHistory()
+	m.historyCache = map[int]git.HistoryStats{statsRangeAll: m.historyStats}
+	m.historyComputing = map[int]bool{}
+	m.width, m.height = 120, 40
+	m.overviewCursor = 20
+
+	// An unwalked window: stats go back to loading and a background walk is kicked.
+	if cmd := m.setStatsRange(0); cmd == nil {
+		t.Fatal("setStatsRange to an uncomputed window should return a walk command")
+	}
+	if m.historyComputed {
+		t.Error("an uncomputed window should render the loading state")
+	}
+	if !m.historyComputing[0] {
+		t.Error("setStatsRange should mark the window's walk as in flight")
+	}
+	if m.overviewCursor != 0 {
+		t.Errorf("overviewCursor = %d, want 0 (clamped to the empty ranking)", m.overviewCursor)
+	}
+
+	// Re-selecting the same window is a no-op (no second walk).
+	if cmd := m.setStatsRange(0); cmd != nil {
+		t.Error("re-selecting the current window should not kick another walk")
+	}
+
+	// The walk lands: it fills the screen and caches, since it's the selected window.
+	week := git.HistoryStats{Commits: 3, Authors: []git.AuthorShare{{Name: "Ada", Commits: 3}}}
+	next, _ := m.Update(historyMsg{rng: 0, stats: week})
+	m = next.(model)
+	if !m.historyComputed || m.historyStats.Commits != 3 {
+		t.Fatalf("historyMsg for the selected window should land on screen, got computed=%v commits=%d",
+			m.historyComputed, m.historyStats.Commits)
+	}
+
+	// Back to a window already walked: served from the cache, no command.
+	if cmd := m.setStatsRange(statsRangeAll); cmd != nil {
+		t.Error("a cached window should not kick another walk")
+	}
+	if !m.historyComputed || m.historyStats.Commits != sampleHistory().Commits {
+		t.Errorf("cached window not restored: computed=%v commits=%d", m.historyComputed, m.historyStats.Commits)
+	}
+
+	// A result for a window the reader has left is banked, not shown.
+	stale := git.HistoryStats{Commits: 1}
+	next, _ = m.Update(historyMsg{rng: 1, stats: stale})
+	m = next.(model)
+	if m.historyStats.Commits != sampleHistory().Commits {
+		t.Errorf("a stale window's result overwrote the screen: commits = %d", m.historyStats.Commits)
+	}
+	if m.historyCache[1].Commits != 1 {
+		t.Error("a stale window's result should still be cached for when it's reselected")
+	}
+
+	// `[` / `]` step the window and stop at the ends rather than wrapping.
+	m.statsRange = 0
+	m.cycleStatsRange(-1)
+	if m.statsRange != 0 {
+		t.Errorf("cycleStatsRange(-1) at the narrowest window = %d, want 0", m.statsRange)
+	}
+	m.statsRange = statsRangeAll
+	m.cycleStatsRange(1)
+	if m.statsRange != statsRangeAll {
+		t.Errorf("cycleStatsRange(1) at the widest window = %d, want %d", m.statsRange, statsRangeAll)
 	}
 }
 

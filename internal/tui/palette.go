@@ -54,6 +54,11 @@ func (m model) paletteActions() []paletteAction {
 		{"Go to commit history", "L", func(m *model) tea.Cmd { return m.goHistory() }},
 		{"Open branch diff vs base", "D", func(m *model) tea.Cmd { return m.goBranchDiff() }},
 		{"Open stats dashboard", "S", func(m *model) tea.Cmd { return m.toggleStats() }},
+		{"Stats: last week", "1", statsRangeAction(0)},
+		{"Stats: last month", "2", statsRangeAction(1)},
+		{"Stats: last 6 months", "3", statsRangeAction(2)},
+		{"Stats: last year", "4", statsRangeAction(3)},
+		{"Stats: all time", "5", statsRangeAction(statsRangeAll)},
 		{"Cycle sidebar width", "[ ]", func(m *model) tea.Cmd {
 			if m.mode != viewOverview && m.mode != viewLog {
 				m.sidebar = (m.sidebar + 1) % 3
@@ -88,6 +93,20 @@ func (m model) paletteActions() []paletteAction {
 		}},
 		{"Show keybindings help", "?", func(m *model) tea.Cmd { m.showHelp = true; return nil }},
 		{"Quit diffcat", "q", func(m *model) tea.Cmd { return tea.Quit }},
+	}
+}
+
+// statsRangeAction builds the palette entry that selects one Stats window. From
+// the history view it also opens the dashboard on that window, so picking a range
+// is a one-step way in; from a diff view it just sets the window (matching `S`,
+// which only enters Stats from the history).
+func statsRangeAction(rng int) func(*model) tea.Cmd {
+	return func(m *model) tea.Cmd {
+		set := m.setStatsRange(rng)
+		if m.mode == viewLog {
+			return tea.Batch(set, m.toggleStats())
+		}
+		return set
 	}
 }
 

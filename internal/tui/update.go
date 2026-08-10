@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -72,43 +73,69 @@ func fullHistoryCmd(repo, base string) tea.Cmd {
 	}
 }
 
-// historyMsg carries the result of a background whole-history computation. It
-// shells `git log --numstat` over every commit reachable from HEAD, which can
+// historyMsg carries the result of a background history computation, tagged with
+// the range (an index into statsRanges) it was computed for so a late arrival for
+// a window the reader has since left lands in the cache instead of on screen. It
+// shells `git log` over the commits reachable from HEAD in that window, which can
 // take a second or two on a deep history — so it runs off the UI thread and lands
 // here rather than blocking the Summary dashboard open.
-type historyMsg struct{ stats git.HistoryStats }
-
-// historyCmd computes the whole-history Summary stats in the background.
-func historyCmd(repo string) tea.Cmd {
-	return func() tea.Msg { return historyMsg{stats: git.History(repo, "HEAD")} }
+type historyMsg struct {
+	rng   int
+	stats git.HistoryStats
 }
 
-// ensureHistory kicks the background whole-history computation when it isn't
-// already computed or in flight, returning the command to run (nil when there's
-// nothing to do). It records the HEAD the run is keyed to so refresh can tell
-// whether the cache is stale. The result arrives as a historyMsg.
+// historyCmd computes one window's Summary stats in the background. The cutoff is
+// resolved here, on the UI thread, so the walk and the range it's cached under
+// can't disagree about "now".
+func historyCmd(repo string, rng int, cutoff time.Time) tea.Cmd {
+	return func() tea.Msg {
+		return historyMsg{rng: rng, stats: git.HistorySince(repo, "HEAD", cutoff)}
+	}
+}
+
+// ensureHistory kicks the background computation for the selected range when it
+// isn't already computed or in flight, returning the command to run (nil when
+// there's nothing to do). It records the HEAD the run is keyed to so refresh can
+// tell whether the cache is stale. The result arrives as a historyMsg.
 func (m *model) ensureHistory() tea.Cmd {
-	if m.historyComputed || m.historyComputing {
+	if m.historyComputed || m.historyComputing[m.statsRange] {
 		return nil
 	}
-	m.historyComputing = true
+	if hs, ok := m.historyCache[m.statsRange]; ok {
+		// Walked before (the reader stepped back to an earlier window): serve it from
+		// the cache rather than re-shelling git.
+		m.historyStats = hs
+		m.historyComputed = true
+		return nil
+	}
+	if m.historyComputing == nil {
+		m.historyComputing = map[int]bool{}
+	}
+	m.historyComputing[m.statsRange] = true
 	m.historyHead = git.HeadSHA(m.repo)
-	return historyCmd(m.repo)
+	return historyCmd(m.repo, m.statsRange, m.statsRangeSpec().cutoff(time.Now()))
 }
 
 // authorModulesMsg carries one contributor's lazily-computed module ranking back to
-// the UI thread; author keys it into the cache.
+// the UI thread; key keys it into the cache (see authorModuleKey).
 type authorModulesMsg struct {
-	author  string
+	key     string
 	modules []git.ModuleCount
+}
+
+// authorModuleKey scopes the lazy module cache to the window it was computed for:
+// a narrower range is a different set of that author's commits, and so a different
+// ranking.
+func authorModuleKey(rng int, name string) string {
+	return strconv.Itoa(rng) + "\x1f" + name
 }
 
 // authorModulesCmd computes a contributor's module ranking in the background by
 // diffing only their commits (git.AuthorModules), so the heavy numstat work never
 // touches the dashboard's whole-repo open path.
-func authorModulesCmd(repo, author string, shas []string) tea.Cmd {
+func authorModulesCmd(repo, key string, shas []string) tea.Cmd {
 	return func() tea.Msg {
-		return authorModulesMsg{author: author, modules: git.AuthorModules(repo, shas)}
+		return authorModulesMsg{key: key, modules: git.AuthorModules(repo, shas)}
 	}
 }
 
@@ -119,18 +146,19 @@ func (m *model) ensureAuthorModules(name string) tea.Cmd {
 	if name == "" {
 		return nil
 	}
-	if _, done := m.authorModules[name]; done {
+	key := authorModuleKey(m.statsRange, name)
+	if _, done := m.authorModules[key]; done {
 		return nil
 	}
-	if m.authorModulesComputing[name] {
+	if m.authorModulesComputing[key] {
 		return nil
 	}
 	shas := m.historyStats.AuthorSHAs[name]
 	if len(shas) == 0 {
 		return nil
 	}
-	m.authorModulesComputing[name] = true
-	return authorModulesCmd(m.repo, name, shas)
+	m.authorModulesComputing[key] = true
+	return authorModulesCmd(m.repo, key, shas)
 }
 
 // Update is the Elm update function — it maps a message to the next model and
@@ -223,9 +251,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tickCmd(interval)
 
 	case historyMsg:
+		if m.historyCache == nil {
+			m.historyCache = map[int]git.HistoryStats{}
+		}
+		m.historyCache[msg.rng] = msg.stats
+		delete(m.historyComputing, msg.rng)
+		if msg.rng != m.statsRange {
+			// The reader switched windows while this walk was in flight: bank it for
+			// when they come back, but leave the screen on the window they're now on.
+			return m, nil
+		}
 		m.historyStats = msg.stats
 		m.historyComputed = true
-		m.historyComputing = false
+		m.clampOverviewCursor()
 		// A live HEAD move while a contributor's detail page is open invalidates
 		// the whole-history cache (refresh drops historyComputed and the lazy
 		// authorModules), so this recompute is the first point the fresh
@@ -244,8 +282,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.authorModules == nil {
 			m.authorModules = map[string][]git.ModuleCount{}
 		}
-		m.authorModules[msg.author] = msg.modules
-		delete(m.authorModulesComputing, msg.author)
+		m.authorModules[msg.key] = msg.modules
+		delete(m.authorModulesComputing, msg.key)
 		return m, nil
 
 	case gitStateMsg:
@@ -580,6 +618,18 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "S":
 		return m, m.toggleStats()
 
+	case "1", "2", "3", "4", "5":
+		// Stats: jump straight to a time window (last week … all time). The number
+		// keys mean nothing in the diff views, so they're inert there.
+		if m.mode == viewOverview || m.mode == viewAuthorDetail {
+			for i, r := range statsRanges {
+				if r.key == key {
+					return m, m.setStatsRange(i)
+				}
+			}
+		}
+		return m, nil
+
 	case "s":
 		// Toggle unified ↔ side-by-side. Row counts differ between modes, so
 		// reset to the top to keep the scroll position sensible. Expansions are
@@ -621,18 +671,26 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	// --- sidebar collapse / expand (`[` narrows toward hidden, `]` widens) ---
+	// On the Stats pages there is no sidebar to size; the same keys step the time
+	// window instead (`]` widens toward all time, `[` narrows toward the last week).
 	case "]":
 		// Widen the sidebar: hidden → normal → wide. A wide sidebar surfaces extra
 		// commit metadata (author, date, tags) in the history list. Disabled in the
 		// commit-history view, where the sidebar is pinned to ~half the pane.
-		if m.mode != viewOverview && m.mode != viewLog && m.sidebar < sidebarWide {
+		if m.mode == viewOverview || m.mode == viewAuthorDetail {
+			return m, m.cycleStatsRange(1)
+		}
+		if m.mode != viewLog && m.sidebar < sidebarWide {
 			m.sidebar++
 		}
 		return m, nil
 	case "[":
 		// Narrow the sidebar: wide → normal → hidden. Collapsing fully hands the
 		// whole width to the diff, so move focus there since the list is gone.
-		if m.mode != viewOverview && m.mode != viewLog && m.sidebar > sidebarHidden {
+		if m.mode == viewOverview || m.mode == viewAuthorDetail {
+			return m, m.cycleStatsRange(-1)
+		}
+		if m.mode != viewLog && m.sidebar > sidebarHidden {
 			m.sidebar--
 			if m.sidebar == sidebarHidden {
 				m.focus = focusDiff
@@ -964,7 +1022,10 @@ func (m *model) refresh() (repaint tea.Cmd) {
 	if head := git.HeadSHA(m.repo); head != m.historyHead {
 		m.historyHead = head
 		m.historyComputed = false
-		m.historyComputing = false
+		// Every window was walked against the old HEAD, so the whole cache goes —
+		// not just the selected range's entry.
+		m.historyCache = map[int]git.HistoryStats{}
+		m.historyComputing = map[int]bool{}
 		// The per-author SHA sets (and so their module rankings) move with history;
 		// drop the lazy cache so a reopened contributor recomputes against the new HEAD.
 		m.authorModules = map[string][]git.ModuleCount{}

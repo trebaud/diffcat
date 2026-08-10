@@ -213,7 +213,7 @@ func TestParseHistory(t *testing.T) {
 		authorRec("sha3", "2026-01-03T09:00:00Z", "Bob", "bob@x.io", "") + "\n" +
 		authorRec("sha2", "2026-01-02T08:00:00Z", "Ada", "ada@x.io", "") + "\n" +
 		authorRec("sha1", "2026-01-01T07:00:00Z", "Ada", "ada@x.io", "")
-	got := parseHistory([]byte(data))
+	got := parseHistory([]byte(data), time.Time{})
 
 	if got.Commits != 4 {
 		t.Errorf("Commits = %d, want 4", got.Commits)
@@ -259,6 +259,47 @@ func TestParseHistory(t *testing.T) {
 	}
 }
 
+// TestParseHistoryCutoff checks the Stats range windows: a non-zero cutoff drops
+// every commit authored before it — from the count, the ranking, the per-author
+// sub-stats and the series alike — and takes an undated commit with it, since one
+// can't be placed inside the window.
+func TestParseHistoryCutoff(t *testing.T) {
+	data := authorRec("sha5", "", "Grace", "grace@x.io", "") + "\n" +
+		authorRec("sha4", "2026-01-04T10:00:00Z", "Bob", "bob@x.io", "Claude <noreply@anthropic.com>") + "\n" +
+		authorRec("sha3", "2026-01-03T09:00:00Z", "Bob", "bob@x.io", "") + "\n" +
+		authorRec("sha2", "2026-01-02T08:00:00Z", "Ada", "ada@x.io", "") + "\n" +
+		authorRec("sha1", "2026-01-01T07:00:00Z", "Ada", "ada@x.io", "")
+
+	// Unbounded: every record counts, undated one included.
+	if all := parseHistory([]byte(data), time.Time{}); all.Commits != 5 {
+		t.Errorf("unbounded Commits = %d, want 5", all.Commits)
+	}
+
+	// Windowed to Jan 3 onward: sha3 (Bob) and sha4 (Claude) only.
+	got := parseHistory([]byte(data), time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC))
+	if got.Commits != 2 {
+		t.Errorf("windowed Commits = %d, want 2", got.Commits)
+	}
+	if len(got.Authors) != 2 {
+		t.Fatalf("windowed Authors = %v, want 2 (Bob, Claude)", got.Authors)
+	}
+	if _, ok := got.ByAuthor["Ada"]; ok {
+		t.Error("Ada is outside the window but still has sub-stats")
+	}
+	if _, ok := got.ByAuthor["Grace"]; ok {
+		t.Error("an undated commit can't be placed in a window, but Grace was counted")
+	}
+	if len(got.AuthorSHAs["Bob"]) != 1 || got.AuthorSHAs["Bob"][0] != "sha3" {
+		t.Errorf("AuthorSHAs[Bob] = %v, want [sha3]", got.AuthorSHAs["Bob"])
+	}
+	if want := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC); !got.Start.Equal(want) {
+		t.Errorf("windowed Start = %v, want %v", got.Start, want)
+	}
+	if wantDaily := []DayCount{{Human: 1}, {AI: 1}}; len(got.Daily) != len(wantDaily) {
+		t.Errorf("windowed Daily = %v, want %v", got.Daily, wantDaily)
+	}
+}
+
 func TestParseHistoryTimeSeries(t *testing.T) {
 	// Same four commits as TestParseHistory: one AI (Claude) on Jan 4, humans on
 	// Jan 1–3, spanning four contiguous days.
@@ -266,7 +307,7 @@ func TestParseHistoryTimeSeries(t *testing.T) {
 		authorRec("sha3", "2026-01-03T09:00:00Z", "Bob", "bob@x.io", "") + "\n" +
 		authorRec("sha2", "2026-01-02T08:00:00Z", "Ada", "ada@x.io", "") + "\n" +
 		authorRec("sha1", "2026-01-01T07:00:00Z", "Ada", "ada@x.io", "")
-	got := parseHistory([]byte(data))
+	got := parseHistory([]byte(data), time.Time{})
 
 	if want := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC); !got.Start.Equal(want) {
 		t.Errorf("Start = %v, want %v", got.Start, want)
@@ -328,7 +369,7 @@ func TestParseHistoryTimeSeries(t *testing.T) {
 func TestParseHistoryUndatedCommit(t *testing.T) {
 	data := authorRec("sha2", "", "Ada", "ada@x.io", "") + "\n" +
 		authorRec("sha1", "2026-01-01T07:00:00Z", "Ada", "ada@x.io", "")
-	got := parseHistory([]byte(data))
+	got := parseHistory([]byte(data), time.Time{})
 	if got.Commits != 2 {
 		t.Errorf("Commits = %d, want 2", got.Commits)
 	}

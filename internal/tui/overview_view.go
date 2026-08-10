@@ -61,9 +61,10 @@ func (m model) overviewCharts(hs git.HistoryStats, width, height int) []string {
 }
 
 // overviewPaneHeight is the height of the two-pane region: the body (between
-// header and footer) minus the title row and the blank under it.
+// header and footer) minus the title row, the range selector under it, and the
+// blank under that.
 func (m model) overviewPaneHeight() int {
-	return max(1, (m.height-2)-2)
+	return max(1, (m.height-2)-3)
 }
 
 // overviewAuthorViewport is how many author rows are visible at once (the pane
@@ -141,12 +142,17 @@ func (m model) overviewBody(width, height int) []string {
 
 	out := []string{
 		padLine(m.overviewTitle(), width),
+		padLine(m.statsRangeBar(), width),
 		padLine("", width),
 	}
 	paneHeight := max(1, height-len(out))
 
 	if total == 0 {
-		out = append(out, padLine(mutedStyle.Render("  no commits"), width))
+		note := "  no commits"
+		if !m.statsRangeSpec().unbounded() {
+			note += " in the " + m.statsRangeLabel()
+		}
+		out = append(out, padLine(mutedStyle.Render(note), width))
 		return fitHeight(out, width, height)
 	}
 
@@ -234,14 +240,21 @@ func (m model) authorDetailBody(width, height int) []string {
 	// The module ranking is loaded lazily and cached separately; splice it into the
 	// per-author stats so the shared chart grid renders the heatmap once it lands
 	// (nil until then, so moduleBlock self-skips and the grid uses the room).
-	hs.Modules = m.authorModules[m.detailAuthor]
+	hs.Modules = m.authorModules[authorModuleKey(m.statsRange, m.detailAuthor)]
 	out := []string{
 		padLine(m.authorDetailTitle(), width),
+		padLine(m.statsRangeBar(), width),
 		padLine("", width),
 	}
 	paneHeight := max(1, height-len(out))
 	if !ok {
-		out = append(out, padLine(mutedStyle.Render("  no data for this contributor"), width))
+		// Either the stats haven't landed yet or — after narrowing the window — this
+		// contributor has no commits inside it.
+		note := "  no data for this contributor"
+		if m.historyComputed && !m.statsRangeSpec().unbounded() {
+			note += " in the " + m.statsRangeLabel()
+		}
+		out = append(out, padLine(mutedStyle.Render(note), width))
 		return fitHeight(out, width, height)
 	}
 
@@ -294,8 +307,8 @@ func (m model) authorDetailTitle() string {
 	head := "  " + titleStyle.Render(m.detailAuthor) + "  " + badge
 	if ok {
 		total := authorTotal(m.historyStats.Authors)
-		head += "   " + mutedStyle.Render(fmt.Sprintf("· #%d of %d · %d commits · %d%% of repo",
-			rank+1, len(m.historyStats.Authors), share.Commits, sharePct(share.Commits, total)))
+		head += "   " + mutedStyle.Render(fmt.Sprintf("· #%d of %d · %d commits · %d%% of %s",
+			rank+1, len(m.historyStats.Authors), share.Commits, sharePct(share.Commits, total), m.statsScope()))
 	}
 	return head
 }
@@ -315,7 +328,7 @@ func (m model) authorSummaryCard(hs git.HistoryStats) []string {
 		word = "commit"
 	}
 	out = append(out, "  "+addedStyle.Render(fmt.Sprintf("%d %s", share.Commits, word))+
-		mutedStyle.Render(fmt.Sprintf(" · %d%% of repo", sharePct(share.Commits, total))))
+		mutedStyle.Render(fmt.Sprintf(" · %d%% of %s", sharePct(share.Commits, total), m.statsScope())))
 
 	if !hs.Start.IsZero() {
 		out = append(out, "  "+mutedStyle.Render(fmt.Sprintf("active %s → %s",
@@ -352,7 +365,7 @@ func (m model) authorSummaryCard(hs git.HistoryStats) []string {
 
 	// The module heatmap loads lazily (it diffs this author's commits); show a note
 	// until it lands, after which the key is present and the heatmap rides the grid.
-	if _, done := m.authorModules[m.detailAuthor]; !done {
+	if _, done := m.authorModules[authorModuleKey(m.statsRange, m.detailAuthor)]; !done {
 		out = append(out, "  "+mutedStyle.Render("top modules · analyzing…"))
 	}
 	return out
@@ -370,9 +383,51 @@ func fitHeight(out []string, width, height int) []string {
 	return out
 }
 
-// overviewTitle labels the dashboard: the whole-repo Stats plus its totals.
+// statsRangeLabel names the selected window in prose — "last 6 months", or "all
+// time" for the unbounded one.
+func (m model) statsRangeLabel() string {
+	s := m.statsRangeSpec()
+	if s.unbounded() {
+		return s.label
+	}
+	return "last " + s.label
+}
+
+// statsScope names what a contributor's share is a share *of*: the whole repo on
+// the unbounded window, otherwise the window itself ("the last 6 months") — a
+// percentage means something different once the history is cut.
+func (m model) statsScope() string {
+	if m.statsRangeSpec().unbounded() {
+		return "repo"
+	}
+	return "the " + m.statsRangeLabel()
+}
+
+// statsRangeBar is the window selector shown under the dashboard title: every
+// range with its number key, the selected one highlighted. It's one line, so it
+// costs the panes a row and keeps the choice (and the keys that change it) visible
+// rather than hidden behind the help screen.
+func (m model) statsRangeBar() string {
+	tabs := make([]string, 0, len(statsRanges))
+	for i, r := range statsRanges {
+		tab := r.key + " " + r.label
+		if i == m.statsRange {
+			tabs = append(tabs, selectedStyle.Render("["+tab+"]"))
+			continue
+		}
+		tabs = append(tabs, mutedStyle.Render(" "+tab+" "))
+	}
+	return "  " + strings.Join(tabs, " ")
+}
+
+// overviewTitle labels the dashboard: the Stats, the window they cover, and its
+// totals.
 func (m model) overviewTitle() string {
-	head := "  " + titleStyle.Render("Stats") + "  " + mutedStyle.Render("entire commit history")
+	span := "entire commit history"
+	if !m.statsRangeSpec().unbounded() {
+		span = m.statsRangeLabel()
+	}
+	head := "  " + titleStyle.Render("Stats") + "  " + mutedStyle.Render(span)
 	if !m.historyComputed {
 		return head
 	}
@@ -390,6 +445,9 @@ func (m model) overviewTitle() string {
 func (m model) overviewLoading(width, height int) []string {
 	out := []string{
 		padLine(m.overviewTitle(), width),
+		// The selector stays live while a window is being walked, so switching again
+		// mid-walk doesn't mean waiting for the first one to land.
+		padLine(m.statsRangeBar(), width),
 		padLine("", width),
 		padLine(mutedStyle.Render("  analyzing commit history…"), width),
 	}

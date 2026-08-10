@@ -210,7 +210,7 @@ func (m model) headerView() string {
 		return left + mid + count
 	}
 	if m.mode == viewOverview {
-		mid := mutedStyle.Render(fmt.Sprintf("  %s · stats", branchLabel(m.branch)))
+		mid := mutedStyle.Render(fmt.Sprintf("  %s · stats · %s", branchLabel(m.branch), m.statsRangeLabel()))
 		stat := ""
 		if m.historyComputed {
 			stat = "  " + headingStyle.Render(fmt.Sprintf("%d commits", m.historyStats.Commits))
@@ -1294,12 +1294,12 @@ func (m model) footerView() string {
 	switch m.mode {
 	case viewOverview:
 		keys = []string{
-			"j/k select author", "↵ open contributor", "S/esc back", "t theme", "? help", "q quit",
+			"j/k select author", "↵ open contributor", "1-5 / [ ] range", "S/esc back", "t theme", "? help", "q quit",
 		}
 		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewAuthorDetail:
 		keys = []string{
-			"esc back", "S/L history", "t theme", "? help", "q quit",
+			"esc back", "1-5 / [ ] range", "S/L history", "t theme", "? help", "q quit",
 		}
 		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewLog:
@@ -1363,6 +1363,8 @@ func (m model) helpBox() string {
 		"  Enter        open the commit's (or working tree's) files",
 		"  d            inspect the selected commit (author, date, full message)",
 		"  S            whole-repo Stats — commit count + per-author ranking",
+		"  1 … 5        in Stats: time window — week / month / 6 months / year / all",
+		"  [ / ]        in Stats: narrow / widen that window",
 		"  ○ local      the working tree: staged + unstaged changes",
 		"  L            return to the history view from anywhere",
 		"  Esc          close the diff pane, then step back (commit tree → history)",

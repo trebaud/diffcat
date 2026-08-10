@@ -266,17 +266,26 @@ type model struct {
 	// It always summarizes the whole repo — every commit reachable from HEAD, from
 	// m.historyStats — and is read-only (no cursor); esc/S returns to the history.
 
-	// Whole-repo Stats (git.History): the non-merge commit count and a per-author
-	// commit ranking across every commit reachable from HEAD. A `git log` walk of a
-	// deep history can take a moment, so it's computed lazily in the background on
-	// first open — historyComputing guards a run in flight so the dashboard opens
-	// instantly and fills in when the historyMsg lands. historyHead is the HEAD it
-	// was computed against, so refresh only invalidates it when committed history
-	// actually moved (not on a mere working-tree edit, which doesn't change it).
+	// Whole-repo Stats (git.HistorySince): the non-merge commit count and a
+	// per-author commit ranking across the commits reachable from HEAD that fall in
+	// the selected time window. A `git log` walk of a deep history can take a
+	// moment, so it's computed lazily in the background on first open —
+	// historyComputing guards the runs in flight (keyed by range) so the dashboard
+	// opens instantly and fills in when the historyMsg lands. historyHead is the
+	// HEAD it was computed against, so refresh only invalidates it when committed
+	// history actually moved (not on a mere working-tree edit, which doesn't change
+	// it).
+	//
+	// historyStats/historyComputed mirror the *selected* range (statsRange, an index
+	// into statsRanges — see overview.go) so every renderer reads one plain struct;
+	// historyCache holds each range already walked, so switching back to a window
+	// visited before is instant.
 	historyStats     git.HistoryStats
 	historyComputed  bool
-	historyComputing bool
+	historyCache     map[int]git.HistoryStats
+	historyComputing map[int]bool
 	historyHead      string
+	statsRange       int
 
 	// overviewCursor is the selected author row on the Stats dashboard (an index into
 	// historyStats.Authors); j/k and the page keys move it and enter opens that
@@ -290,10 +299,12 @@ type model struct {
 
 	// authorModules caches each contributor's "Top modules" ranking, computed lazily
 	// the first time their detail page opens (git.AuthorModules diffs only that
-	// author's commits, off the dashboard's fast open path). A present key — even a
-	// nil/empty ranking — means "done, don't recompute"; authorModulesComputing guards
-	// the in-flight git call. Both are dropped when committed history moves (refresh),
-	// since the per-author SHA sets change with it.
+	// author's commits, off the dashboard's fast open path). Keyed by
+	// authorModuleKey (range + name), since a narrower window is a different set of
+	// that author's commits. A present key — even a nil/empty ranking — means "done,
+	// don't recompute"; authorModulesComputing guards the in-flight git call. Both
+	// are dropped when committed history moves (refresh), since the per-author SHA
+	// sets change with it.
 	authorModules          map[string][]git.ModuleCount
 	authorModulesComputing map[string]bool
 
@@ -323,6 +334,10 @@ func newModel(repo, base, baseName string, baseIsDefault bool, r resolved) model
 
 		authorModules:          map[string][]git.ModuleCount{},
 		authorModulesComputing: map[string]bool{},
+
+		statsRange:       statsRangeAll,
+		historyCache:     map[int]git.HistoryStats{},
+		historyComputing: map[int]bool{},
 	}
 
 	// Restore onboarding state. The one-time first-run hint is a playful touch; it

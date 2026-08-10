@@ -849,11 +849,31 @@ const recentWindow = 30
 // thread, since even a bare walk of a very deep history isn't instant. Returns a
 // zero HistoryStats on error.
 func History(repo, rev string) HistoryStats {
-	out, err := exec.Command("git", "-C", repo, "log", "--no-color", "--no-merges", authorshipFormat, rev).Output()
+	return HistorySince(repo, rev, time.Time{})
+}
+
+// HistorySince is History restricted to a time window: only commits authored on
+// or after cutoff are counted (a zero cutoff means the whole history, i.e.
+// History). It backs the Stats dashboard's range selector (last week/month/6
+// months/year/all time).
+//
+// The window is applied twice, deliberately. `--since` lets git skip most of the
+// output on a deep history, but it filters on the *committer* date — which a
+// rebase or cherry-pick moves — while every series in HistoryStats is keyed on
+// the author date. So the git-side filter is only an optimization (committer date
+// is normally >= author date, making it a superset), and parseHistory re-applies
+// the cutoff exactly, on the author date it already parses.
+func HistorySince(repo, rev string, cutoff time.Time) HistoryStats {
+	args := []string{"-C", repo, "log", "--no-color", "--no-merges", authorshipFormat}
+	if !cutoff.IsZero() {
+		args = append(args, "--since="+cutoff.Format(time.RFC3339))
+	}
+	args = append(args, rev)
+	out, err := exec.Command("git", args...).Output()
 	if err != nil {
 		return HistoryStats{}
 	}
-	return parseHistory(out)
+	return parseHistory(out, cutoff)
 }
 
 // parseHistory aggregates `git log --numstat` output (framed by authorshipFormat)
@@ -863,8 +883,11 @@ func History(repo, rev string) HistoryStats {
 // (author or Co-authored-by trailer), else to its human author by name — and
 // increments both the repo-wide and that author's accumulators. The numstat lines
 // trailing each record give the per-file line counts behind the module ranking.
+// A non-zero cutoff drops every commit authored before it (and, with no parseable
+// author date, every commit that can't be placed in the window) so the whole
+// summary — counts, ranking and series alike — describes just that window.
 // Pure, so it's testable without a repository.
-func parseHistory(data []byte) HistoryStats {
+func parseHistory(data []byte, cutoff time.Time) HistoryStats {
 	// Each author accumulates their own copy of the time-series plus the list of
 	// their commit SHAs, so the per-contributor page reuses the dashboard renderers
 	// and AuthorModules can scope a numstat pass to just that author's commits.
@@ -892,7 +915,6 @@ func parseHistory(data []byte) HistoryStats {
 		if rec == "" {
 			continue
 		}
-		commits++
 		// The record is a single formatted line (no diff body): sha, date, author,
 		// email, co-authors.
 		header := rec
@@ -917,6 +939,14 @@ func parseHistory(data []byte) HistoryStats {
 		if len(f) > 4 {
 			c.coauthors = f[4]
 		}
+		// A commit with an unparseable/empty author date still counts toward the
+		// ranking below, but contributes no time-series point — unless a window is
+		// in force, where an unplaceable commit can't be claimed to fall inside it.
+		t, dateErr := time.Parse(time.RFC3339, dateStr)
+		if !cutoff.IsZero() && (dateErr != nil || t.Before(cutoff)) {
+			continue
+		}
+		commits++
 		name := c.agent()
 		ai := name != ""
 		if !ai {
@@ -941,10 +971,7 @@ func parseHistory(data []byte) HistoryStats {
 			}
 		}
 
-		// A commit with an unparseable/empty author date still counts toward the
-		// ranking above, but contributes no time-series point.
-		t, err := time.Parse(time.RFC3339, dateStr)
-		if err != nil {
+		if dateErr != nil {
 			continue
 		}
 		if ai {
