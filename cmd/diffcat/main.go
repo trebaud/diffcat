@@ -38,7 +38,7 @@ func main() {
 }
 
 func rootCmd() *cobra.Command {
-	var base, theme, icons string
+	var base, theme, icons, editor string
 	var noAnim bool
 
 	root := &cobra.Command{
@@ -56,6 +56,7 @@ func rootCmd() *cobra.Command {
 			return tui.Run(dir, base, tui.Options{
 				Theme:     theme,
 				Icons:     icons,
+				Editor:    editor,
 				NoAnim:    noAnim,
 				NoAnimSet: cmd.Flags().Changed("no-anim"),
 			})
@@ -65,6 +66,7 @@ func rootCmd() *cobra.Command {
 	root.Flags().StringVar(&theme, "theme", "", "Color theme: github, dracula, nord, catppuccin, gruvbox, tokyonight, solarized, monochrome")
 	root.Flags().StringVar(&icons, "icons", "", "File-type icon set: ascii, unicode, nerd")
 	root.Flags().BoolVar(&noAnim, "no-anim", false, "Disable animations (nyan cat, pulse, shimmer)")
+	root.Flags().StringVar(&editor, "editor", "", "Editor the e key opens files in (default: the config file, then $VISUAL/$EDITOR, then vim)")
 	root.SetVersionTemplate("diffcat v{{.Version}}\n")
 	root.Flags().BoolP("version", "v", false, "Show version")
 

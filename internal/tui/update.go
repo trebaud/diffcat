@@ -310,6 +310,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(sync, repaint)
 
+	case editorFinishedMsg:
+		// Back from the editor: the file may have changed under us, so re-read from
+		// disk (and re-seed the sync fingerprint so the poll doesn't immediately
+		// repeat the work). A failure to launch is reported in the footer.
+		if msg.err != nil {
+			m.flash = "editor failed: " + msg.err.Error()
+			return m, nil
+		}
+		repaint := m.refresh()
+		m.syncFingerprint = git.Fingerprint(m.repo, m.baseName)
+		return m, repaint
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -328,8 +340,10 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Once the reader touches a key, retire the first-run hint (it also auto-fades);
-	// the keypress itself still goes on to act.
+	// the keypress itself still goes on to act. A pending flash message clears on
+	// the same terms — it has been read by the time the reader acts again.
 	m.showToast = false
+	m.flash = ""
 
 	if m.showGlobalSearch {
 		// Global search is open. Enter navigates to the highlighted hit; esc (or
@@ -606,6 +620,12 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.detailsScroll = 0
 		}
 		return m, nil
+
+	case "e":
+		// Hand the terminal to the reader's editor on the file under the cursor,
+		// at the line the diff cursor is on. Inert when no editor is configured
+		// (the footer says so) or nothing is in scope.
+		return m, m.openEditor()
 
 	case "r":
 		repaint := m.refresh()

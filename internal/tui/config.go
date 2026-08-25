@@ -11,12 +11,14 @@ import (
 // config.go handles persisted preferences and resolves the effective startup
 // options from (in precedence order) command-line flags, environment variables,
 // the on-disk config file, and finally terminal auto-detection. NO_COLOR, when
-// present, overrides everything with the monochrome theme and no animation.
+// present, overrides everything with the monochrome theme and no animation (it
+// says nothing about the editor, which stays resolved either way).
 
 // userConfig is the persisted preference file. Dark is a pointer so "unset"
 // (auto-detect from the terminal) is distinct from an explicit light choice.
 type userConfig struct {
 	Theme        string `json:"theme,omitempty"`
+	Editor       string `json:"editor,omitempty"`
 	Icons        string `json:"icons,omitempty"`
 	ReduceMotion bool   `json:"reduceMotion,omitempty"`
 	Dark         *bool  `json:"dark,omitempty"`
@@ -28,6 +30,7 @@ type userConfig struct {
 type Options struct {
 	Theme     string
 	Icons     string
+	Editor    string
 	NoAnim    bool
 	NoAnimSet bool
 }
@@ -38,6 +41,7 @@ type resolved struct {
 	iconSet      iconSet
 	reduceMotion bool
 	dark         bool
+	editor       string
 }
 
 // configPath returns the preference file location, following the XDG Base
@@ -99,7 +103,7 @@ func resolveOptions(o Options, cfg userConfig) resolved {
 		if idx < 0 {
 			idx = 0
 		}
-		return resolved{themeIdx: idx, iconSet: iconASCII, reduceMotion: true, dark: detectDark()}
+		return resolved{themeIdx: idx, iconSet: iconASCII, reduceMotion: true, dark: detectDark(), editor: resolveEditor(o.Editor, cfg)}
 	}
 
 	r := resolved{}
@@ -110,6 +114,8 @@ func resolveOptions(o Options, cfg userConfig) resolved {
 	}
 
 	r.iconSet, _ = parseIconSet(firstNonEmpty(o.Icons, os.Getenv("DIFFCAT_ICONS"), cfg.Icons))
+
+	r.editor = resolveEditor(o.Editor, cfg)
 
 	switch {
 	case o.NoAnimSet:

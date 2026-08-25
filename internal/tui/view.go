@@ -1290,6 +1290,11 @@ func (m model) footerView() string {
 	if m.showToast {
 		return m.toastText()
 	}
+	// A one-line message (editor trouble, nothing to open) takes the footer until
+	// the next keypress — see model.flash.
+	if m.flash != "" {
+		return selectedStyle.Render(m.flash)
+	}
 	var keys []string
 	switch m.mode {
 	case viewOverview:
@@ -1345,6 +1350,7 @@ func (m model) helpBox() string {
 		"  h / l        scroll the diff left / right (for long lines)",
 		"  Enter / o    open file's diff / expand context",
 		"  f            fuzzy-jump to a changed file by name",
+		"  e            open the file under the cursor in $EDITOR, at that line",
 		"  [ / ]        collapse / widen the sidebar (full-width diff ↔ wide list)",
 		"",
 		headingStyle.Render("  motions (act on the focused pane)"),

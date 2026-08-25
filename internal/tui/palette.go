@@ -51,6 +51,7 @@ func (m model) paletteActions() []paletteAction {
 			}
 			return nil
 		}},
+		{"Open the file in your editor", "e", func(m *model) tea.Cmd { return m.openEditor() }},
 		{"Go to commit history", "L", func(m *model) tea.Cmd { return m.goHistory() }},
 		{"Open branch diff vs base", "D", func(m *model) tea.Cmd { return m.goBranchDiff() }},
 		{"Open stats dashboard", "S", func(m *model) tea.Cmd { return m.toggleStats() }},

@@ -27,6 +27,7 @@ diffcat is narrower on purpose, its main focus is on making the git diff view ex
 - GitHub-style diffs: green/red tints, line-number gutters, syntax highlighting, surrounding-line expansion
 - Unified or side-by-side view (`s`); a theme picker (`t`) with 8 color themes, light/dark, file-type icons, and a reduce-motion toggle
 - Auto-detected base, or any ref via `--base`
+- `e` opens the file under the cursor in your own editor, at the line you were reading
 - Commit history view with per-commit diffs
 - Stats dashboard (`S`): contribution calendar, per-author ranking, activity charts, streaks, and a human-vs-AI split that names each agent — over the last week, month, 6 months, year, or all time (`1`–`5`, or `[`/`]`)
 
@@ -77,6 +78,29 @@ diffcat -b 3f9a1c2
 ```
 
 Without `--base`, the base is auto-detected: `origin/HEAD`, else `master`, else `main`.
+
+## Open in your editor
+
+Press `e` on a file (or on a line in the diff) to hand the terminal to your
+editor, opened at that line. diffcat suspends while the editor runs and reloads
+the diff from disk when you quit it, so an edit shows up immediately.
+
+It's vim unless you say otherwise. Name another in
+`~/.config/diffcat/config.json`:
+
+```json
+{
+  "editor": "nvim"
+}
+```
+
+The value is a command, so flags are fine (`"code -w"`, `"emacsclient -nw"`).
+Precedence is `--editor` → `DIFFCAT_EDITOR` → config → `$VISUAL` → `$EDITOR` →
+`vim`.
+
+The line number is passed the way each editor expects it: `+N` for the vim
+family, nano, micro, kak and emacs; `--goto file:N` for VS Code and its forks;
+`file:N` for Sublime, Helix and Zed. Anything else is handed just the path.
 
 ## Themes & appearance
 

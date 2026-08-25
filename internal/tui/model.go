@@ -217,6 +217,14 @@ type model struct {
 
 	showHelp bool
 
+	// editor is the resolved editor command (`e` opens the file under the cursor
+	// in it); empty when none is configured. flash is a transient one-line message
+	// shown in place of the footer keybindings — an editor that couldn't launch, a
+	// path that isn't on disk. It's cleared by the next keypress rather than a
+	// timer, so it survives reduce-motion (where there is no tick to age it out).
+	editor string
+	flash  string
+
 	// Command palette (`:`). showPalette gates the floating action picker;
 	// paletteInput is the fuzzy query and paletteSel the highlighted action.
 	showPalette  bool
@@ -327,6 +335,7 @@ func newModel(repo, base, baseName string, baseIsDefault bool, r resolved) model
 		themeIdx:        r.themeIdx,
 		iconSet:         r.iconSet,
 		reduceMotion:    r.reduceMotion,
+		editor:          r.editor,
 		ticking:         !r.reduceMotion,
 		fileSig:         map[string]string{},
 		unseen:          map[string]bool{},
