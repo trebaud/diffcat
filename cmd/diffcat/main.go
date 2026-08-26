@@ -93,7 +93,7 @@ func filesCmd(base *string) *cobra.Command {
 			if b == "" {
 				b = git.DefaultBranch(repo)
 			}
-			ref := git.BaseRef(repo, b)
+			ref := git.BaseRef(repo, git.BaseBranchRev(repo, b))
 			files, err := git.ChangedFiles(repo, ref)
 			if err != nil {
 				return err

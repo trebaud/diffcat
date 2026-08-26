@@ -39,9 +39,14 @@ func CurrentBranch(repo string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// DefaultBranch picks the branch to diff against. It prefers origin/HEAD, then
-// probes the conventional names. "master" is checked before "main" since this
-// tool is built around diffing against master.
+// DefaultBranch picks the *label* of the branch to diff against: it prefers the
+// name origin/HEAD points at, then probes the conventional names. "master" is
+// checked before "main" since this tool is built around diffing against master.
+//
+// The result is a display label and an identity ("am I on the base branch?"), not
+// necessarily the ref git should measure against — a local master that hasn't been
+// fetched in a week is the wrong yardstick. Pass it through BaseBranchRev to get
+// the ref, then through BaseRef to get the commit to diff from.
 func DefaultBranch(repo string) string {
 	out, err := exec.Command("git", "-C", repo, "symbolic-ref", "refs/remotes/origin/HEAD").Output()
 	if err == nil {
@@ -86,12 +91,80 @@ func HeadSHA(repo string) string {
 
 // isBranch reports whether ref names a local or remote-tracking branch.
 func isBranch(repo, ref string) bool {
-	for _, full := range []string{"refs/heads/" + ref, "refs/remotes/" + ref} {
-		if exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", full).Run() == nil {
-			return true
+	return isLocalBranch(repo, ref) || isRemoteBranch(repo, ref)
+}
+
+// isLocalBranch reports whether ref names a branch under refs/heads.
+func isLocalBranch(repo, ref string) bool {
+	return hasRef(repo, "refs/heads/"+ref)
+}
+
+// isRemoteBranch reports whether ref names a remote-tracking branch under
+// refs/remotes (e.g. "origin/master").
+func isRemoteBranch(repo, ref string) bool {
+	return hasRef(repo, "refs/remotes/"+ref)
+}
+
+func hasRef(repo, full string) bool {
+	return exec.Command("git", "-C", repo, "show-ref", "--verify", "--quiet", full).Run() == nil
+}
+
+// BaseBranchRev resolves a base-branch label (e.g. "master") to the ref the diff
+// should actually be measured against, which may be the remote-tracking
+// counterpart ("origin/master").
+//
+// Labels and refs diverge because a local base branch goes stale: it only moves
+// when you check it out and pull. Diffing a feature branch against a week-old
+// local master reports every commit that landed on master in the meantime as
+// "yours" — the whole point of the fix. But the remote can be the stale one too
+// (branch created from an origin/master that a later fetch has not caught up to,
+// or a locally-advanced master), so neither ref wins unconditionally.
+//
+// The tie-break is which candidate forked from HEAD *later*: whichever merge base
+// is a descendant of the other is the tighter yardstick. Equal merge bases (the
+// common, up-to-date case) keep the local name so the display label stays put.
+// Anything that isn't a local branch — a raw SHA, a tag, HEAD~3, an
+// already-remote-qualified ref — is returned verbatim.
+func BaseBranchRev(repo, name string) string {
+	if name == "" || isRemoteBranch(repo, name) {
+		return name
+	}
+	remote := remoteCounterpart(repo, name)
+	if remote == "" {
+		return name
+	}
+	if !isLocalBranch(repo, name) {
+		// Nothing local to compare against (a fresh clone where master was never
+		// checked out): the remote ref is the only real base.
+		return remote
+	}
+	localBase, remoteBase := MergeBase(repo, name), MergeBase(repo, remote)
+	if localBase != remoteBase && isAncestor(repo, localBase, remoteBase) {
+		return remote
+	}
+	return name
+}
+
+// remoteCounterpart returns the remote-tracking ref standing for the local branch
+// name — its configured upstream when it has one, else origin/<name> — or "" when
+// there is none.
+func remoteCounterpart(repo, name string) string {
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "--abbrev-ref", "--verify", "--quiet", name+"@{upstream}").Output()
+	if err == nil {
+		if up := strings.TrimSpace(string(out)); up != "" && isRemoteBranch(repo, up) {
+			return up
 		}
 	}
-	return false
+	if fallback := "origin/" + name; isRemoteBranch(repo, fallback) {
+		return fallback
+	}
+	return ""
+}
+
+// isAncestor reports whether commit a is an ancestor of commit b (true when they
+// are the same commit, matching `git merge-base --is-ancestor`).
+func isAncestor(repo, a, b string) bool {
+	return exec.Command("git", "-C", repo, "merge-base", "--is-ancestor", a, b).Run() == nil
 }
 
 // BaseRef resolves the ref to diff against for the user-supplied base.
@@ -394,9 +467,9 @@ func (f FileChange) Binary() bool { return f.Added < 0 || f.Deleted < 0 }
 // avoids recomputing the diff: a couple of git calls plus a handful of lstats,
 // far cheaper than ChangedFiles. An unchanged fingerprint means nothing diffcat
 // cares about has changed, so a poll can skip the refresh entirely.
-func Fingerprint(repo, baseName string) string {
+func Fingerprint(repo, baseRev string) string {
 	h := sha1.New()
-	for _, ref := range []string{"HEAD", baseName} {
+	for _, ref := range []string{"HEAD", baseRev} {
 		out, _ := exec.Command("git", "-C", repo, "rev-parse", "--verify", "--quiet", ref).Output()
 		h.Write(out)
 	}

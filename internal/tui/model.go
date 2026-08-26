@@ -63,8 +63,9 @@ type model struct {
 	loading bool
 
 	repo          string
-	base          string // ref the diff is computed against (merge base of master/HEAD)
-	baseName      string // human label for the base branch
+	base          string // ref the diff is computed against (merge base of baseRev/HEAD)
+	baseName      string // human label for the base branch, e.g. "master"
+	baseRev       string // ref that label resolves to for git calls — "origin/master" when the local branch is stale (see git.BaseBranchRev)
 	baseIsDefault bool   // baseName is the repo's default branch (master/main) — surfaced in the header
 	branch        string // current branch
 	shortstat     string
@@ -319,7 +320,7 @@ type model struct {
 	err error
 }
 
-func newModel(repo, base, baseName string, baseIsDefault bool, r resolved) model {
+func newModel(repo, base, baseName, baseRev string, baseIsDefault bool, r resolved) model {
 	m := model{
 		loading:         true,
 		mode:            viewLog,
@@ -327,6 +328,7 @@ func newModel(repo, base, baseName string, baseIsDefault bool, r resolved) model
 		repo:            repo,
 		base:            base,
 		baseName:        baseName,
+		baseRev:         baseRev,
 		baseIsDefault:   baseIsDefault,
 		collapsed:       map[string]bool{},
 		commitDiffCache: map[string][]diff.Line{},
@@ -494,13 +496,13 @@ func (m model) selectedRow() *treeRow {
 func (m model) Init() tea.Cmd {
 	// startupCmd does the heavy launch git work off the render path, so the first
 	// frame is the loading screen rather than a blank stall (see newModel).
-	start := startupCmd(m.repo, m.base, m.baseName)
+	start := startupCmd(m.repo, m.base, m.baseRev)
 	// Reduce-motion freezes every animation, so there's no need for the recurring
 	// tick — only the background git-state poll keeps running.
 	if m.reduceMotion {
-		return tea.Batch(start, syncCmd(m.repo, m.baseName))
+		return tea.Batch(start, syncCmd(m.repo, m.baseRev))
 	}
-	return tea.Batch(start, tickCmd(tickSlow), syncCmd(m.repo, m.baseName))
+	return tea.Batch(start, tickCmd(tickSlow), syncCmd(m.repo, m.baseRev))
 }
 
 // selectedFile returns the file under the cursor, or nil when the cursor is on a

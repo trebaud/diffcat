@@ -86,7 +86,7 @@ func (m model) paletteActions() []paletteAction {
 		}},
 		{"Refresh from disk", "r", func(m *model) tea.Cmd {
 			repaint := m.refresh()
-			m.syncFingerprint = git.Fingerprint(m.repo, m.baseName)
+			m.syncFingerprint = git.Fingerprint(m.repo, m.baseRev)
 			if m.mode == viewOverview || m.mode == viewAuthorDetail {
 				return tea.Batch(repaint, m.ensureHistory())
 			}

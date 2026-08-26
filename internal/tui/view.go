@@ -234,7 +234,7 @@ func (m model) headerView() string {
 		mid := mutedStyle.Render(fmt.Sprintf("  history · commit %s", sha))
 		return left + mid + "  " + headingStyle.Render(subject)
 	}
-	base := m.baseName
+	base := m.baseDisplay()
 	if base == "" {
 		base = "base"
 	}
@@ -368,7 +368,7 @@ func (m model) commitListView(width int) string {
 			if ci == m.baseStart {
 				b.WriteString(mutedStyle.Render("│"))
 				b.WriteString("\n")
-				b.WriteString(commitDivider(m.baseName, width))
+				b.WriteString(commitDivider(m.baseDisplay(), width))
 				b.WriteString("\n")
 			}
 			b.WriteString(m.commitRow(m.commits[ci], sel, width))
@@ -1262,6 +1262,17 @@ func (m model) paneHeading(text string, pane focusPane) string {
 	return headingStyle.Render("  " + text)
 }
 
+// baseDisplay is the base as the reader should see it: the label, except when it
+// resolved to a different ref (a stale local master standing in for
+// origin/master), where naming the label would misreport what the diff, the
+// history divider, and the D shortcut are actually measured against.
+func (m model) baseDisplay() string {
+	if m.baseRev != "" && m.baseRev != m.baseName {
+		return m.baseRev
+	}
+	return m.baseName
+}
+
 // onBaseBranch reports whether the current branch is the base it would be
 // diffed against. There the branch diff is degenerate — the merge base
 // collapses to HEAD, so "D" would only ever show working-tree-vs-HEAD (already
@@ -1274,10 +1285,10 @@ func (m model) onBaseBranch() bool {
 // branchDiffLabel names the D shortcut after the actual base branch, e.g.
 // "diff vs main", falling back to a generic label when the base is unnamed.
 func (m model) branchDiffLabel() string {
-	if m.baseName == "" {
-		return "branch diff"
+	if base := m.baseDisplay(); base != "" {
+		return "diff vs " + base
 	}
-	return "diff vs " + m.baseName
+	return "branch diff"
 }
 
 func (m model) footerView() string {

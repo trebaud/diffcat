@@ -54,11 +54,12 @@ func commitInRepo(t *testing.T, repo, msg string) string {
 // parks it in the commit-history view.
 func newSyncModel(t *testing.T, repo string) model {
 	t.Helper()
-	base := git.BaseRef(repo, "main")
-	m := newModel(repo, base, "main", true, resolved{reduceMotion: true})
+	baseRev := git.BaseBranchRev(repo, "main")
+	base := git.BaseRef(repo, baseRev)
+	m := newModel(repo, base, "main", baseRev, true, resolved{reduceMotion: true})
 	// Drive the same async startup the running program does: the background gather
 	// lands as a startupMsg, which seeds the model out of its loading state.
-	next, _ := m.Update(startupMsg{su: gatherStartup(repo, base, "main")})
+	next, _ := m.Update(startupMsg{su: gatherStartup(repo, base, baseRev)})
 	m = next.(model)
 	m.mode = viewLog
 	return m
@@ -77,7 +78,7 @@ func hasCommit(m model, sha string) bool {
 // poll feeds one background git-state message — exactly what syncCmd delivers —
 // and returns the updated model.
 func poll(m model) model {
-	next, _ := m.Update(gitStateMsg{fingerprint: git.Fingerprint(m.repo, m.baseName)})
+	next, _ := m.Update(gitStateMsg{fingerprint: git.Fingerprint(m.repo, m.baseRev)})
 	return next.(model)
 }
 

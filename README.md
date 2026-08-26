@@ -77,7 +77,12 @@ diffcat -b v1.2.0
 diffcat -b 3f9a1c2
 ```
 
-Without `--base`, the base is auto-detected: `origin/HEAD`, else `master`, else `main`.
+Without `--base`, the base is auto-detected: `origin/HEAD`, else `master`, else
+`main`. The detected name is then resolved to whichever of the local branch and
+its remote-tracking counterpart forked from `HEAD` later, so an unfetched local
+`master` doesn't report everything that landed on `origin/master` since as part
+of your branch. When the two differ, the header and the history divider name the
+ref actually being measured against (e.g. `origin/master`).
 
 ## Open in your editor
 

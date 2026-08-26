@@ -18,7 +18,8 @@ import (
 )
 
 // Run computes the diff of the repo at dir against baseName and launches the
-// interactive viewer. baseName may be empty to auto-detect (master → main). opts
+// interactive viewer. baseName may be empty to auto-detect (master → main); it is
+// a label, resolved to the ref actually diffed against by git.BaseBranchRev. opts
 // carries command-line overrides for theme/icons/motion; they're layered over
 // the env, the saved config, and terminal auto-detection by resolveOptions.
 func Run(dir, baseName string, opts Options) error {
@@ -32,7 +33,12 @@ func Run(dir, baseName string, opts Options) error {
 		baseName = defaultBranch
 	}
 	baseIsDefault := baseName == defaultBranch
-	base := git.BaseRef(repo, baseName)
+	// The label the reader typed (or the repo default) is not necessarily the ref to
+	// measure against: a local master that hasn't been fetched lately would report
+	// everything that landed on master since as part of this branch. BaseBranchRev
+	// picks the tighter of the local branch and its remote-tracking counterpart.
+	baseRev := git.BaseBranchRev(repo, baseName)
+	base := git.BaseRef(repo, baseRev)
 
 	// Only the cheap ref resolution above runs before launch (each ~ms even on a
 	// huge repo). The expensive change-list / history / status work is deferred to
@@ -41,7 +47,7 @@ func Run(dir, baseName string, opts Options) error {
 	r := resolveOptions(opts, loadConfig())
 	ApplyTheme(themes[r.themeIdx], r.dark)
 
-	p := tea.NewProgram(newModel(repo, base, baseName, baseIsDefault, r))
+	p := tea.NewProgram(newModel(repo, base, baseName, baseRev, baseIsDefault, r))
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error running TUI: %v\n", err)
 		os.Exit(1)
@@ -66,13 +72,13 @@ type startup struct {
 // separate git process and reads its own refs/objects, so they don't contend; the
 // only ordering constraint (resolving base) is already done by the caller. Errors
 // degrade to zero values — the same fallback each call made when run serially.
-func gatherStartup(repo, base, baseName string) startup {
+func gatherStartup(repo, base, baseRev string) startup {
 	var su startup
 	var wg sync.WaitGroup
 	wg.Add(5)
 	go func() { defer wg.Done(); su.files, _ = git.ChangedFiles(repo, base) }()
 	go func() { defer wg.Done(); su.branch = git.CurrentBranch(repo) }()
-	go func() { defer wg.Done(); su.fingerprint = git.Fingerprint(repo, baseName) }()
+	go func() { defer wg.Done(); su.fingerprint = git.Fingerprint(repo, baseRev) }()
 	go func() {
 		defer wg.Done()
 		// Cap the HEAD-side walk so the first list paints fast; the full list is

@@ -38,9 +38,9 @@ type gitStateMsg struct{ fingerprint string }
 // (Update re-arms it), so a slow `git status` can't pile up overlapping polls.
 const syncInterval = 1500 * time.Millisecond
 
-func syncCmd(repo, baseName string) tea.Cmd {
+func syncCmd(repo, baseRev string) tea.Cmd {
 	return tea.Tick(syncInterval, func(time.Time) tea.Msg {
-		return gitStateMsg{fingerprint: git.Fingerprint(repo, baseName)}
+		return gitStateMsg{fingerprint: git.Fingerprint(repo, baseRev)}
 	})
 }
 
@@ -52,8 +52,8 @@ type startupMsg struct{ su startup }
 
 // startupCmd runs the heavy launch git work in the background (see gatherStartup),
 // landing as a startupMsg. Kicked from Init.
-func startupCmd(repo, base, baseName string) tea.Cmd {
-	return func() tea.Msg { return startupMsg{su: gatherStartup(repo, base, baseName)} }
+func startupCmd(repo, base, baseRev string) tea.Cmd {
+	return func() tea.Msg { return startupMsg{su: gatherStartup(repo, base, baseRev)} }
 }
 
 // fullHistoryMsg carries the complete (uncapped) commit history walked in the
@@ -291,7 +291,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// refresh against (and applyStartup will seed the fingerprint baseline), so
 		// just keep the poll alive without firing a spurious refresh.
 		if m.loading {
-			return m, syncCmd(m.repo, m.baseName)
+			return m, syncCmd(m.repo, m.baseRev)
 		}
 		// Only do the (more expensive) refresh when the cheap fingerprint moved;
 		// otherwise the poll is a no-op beyond re-arming itself.
@@ -300,7 +300,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.syncFingerprint = msg.fingerprint
 			repaint = m.refresh()
 		}
-		sync := syncCmd(m.repo, m.baseName)
+		sync := syncCmd(m.repo, m.baseRev)
 		// If the commit that moved invalidated the whole-history stats and the Stats
 		// dashboard (or a contributor's detail page) is on screen, recompute them
 		// live; otherwise leave it for the next open. (refresh only invalidates when
@@ -319,7 +319,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		repaint := m.refresh()
-		m.syncFingerprint = git.Fingerprint(m.repo, m.baseName)
+		m.syncFingerprint = git.Fingerprint(m.repo, m.baseRev)
 		return m, repaint
 
 	case tea.KeyPressMsg:
@@ -629,7 +629,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	case "r":
 		repaint := m.refresh()
-		m.syncFingerprint = git.Fingerprint(m.repo, m.baseName)
+		m.syncFingerprint = git.Fingerprint(m.repo, m.baseRev)
 		if m.mode == viewOverview || m.mode == viewAuthorDetail {
 			return m, tea.Batch(repaint, m.ensureHistory())
 		}
@@ -1027,7 +1027,11 @@ func abs(n int) int {
 // scroll/cursor/expansion are kept when the visible content didn't actually
 // change — only genuinely new content resets the view.
 func (m *model) refresh() (repaint tea.Cmd) {
-	m.base = git.BaseRef(m.repo, m.baseName)
+	// Re-resolve label → ref as well as ref → merge base: a fetch that advances
+	// origin/master, or a pull that catches the local branch up, changes which of
+	// the two is the tighter base while diffcat is open.
+	m.baseRev = git.BaseBranchRev(m.repo, m.baseName)
+	m.base = git.BaseRef(m.repo, m.baseRev)
 	// Keep the branch label current: a checkout while diffcat is open moves HEAD to
 	// a different branch, and the header reads from m.branch.
 	m.branch = git.CurrentBranch(m.repo)
