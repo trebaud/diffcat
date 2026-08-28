@@ -271,6 +271,15 @@ type model struct {
 	fileFindInput  string
 	fileFindSel    int
 
+	// Branch switcher (`b`, history view only — see branchpick.go).
+	// branchPickActive gates the floating picker; branchPickInput is the fuzzy
+	// query, branchPickSel the highlighted row, and branchPickList the local
+	// branches (minus the checked-out one) read fresh when the picker opens.
+	branchPickActive bool
+	branchPickInput  string
+	branchPickSel    int
+	branchPickList   []git.Branch
+
 	// Stats dashboard (viewOverview, toggled with `S` from the commit-history view).
 	// It always summarizes the whole repo — every commit reachable from HEAD, from
 	// m.historyStats — and is read-only (no cursor); esc/S returns to the history.

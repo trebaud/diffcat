@@ -277,6 +277,15 @@ func TestRenderNoWrap(t *testing.T) {
 	finding := sampleModel()
 	finding.fileFindActive = true
 	finding.fileFindInput = "view"
+	// The branch switcher, with a long branch name to exercise row truncation.
+	branchPick := logSampleModel()
+	branchPick.branchPickActive = true
+	branchPick.branchPickInput = "ma"
+	branchPick.branchPickList = []git.Branch{
+		{Name: "main", Upstream: "origin/main", Author: "Ada Lovelace", Date: "2026-08-20"},
+		{Name: "feature/a-very-long-branch-name-that-should-truncate-in-a-narrow-box", Author: "A Contributor With A Very Long Display Name", Date: "2026-08-27"},
+		{Name: "fix/small", Upstream: "upstream/fix/small", Author: "Grace Hopper", Date: "2026-08-10"},
+	}
 	// Sidebar collapse/expand states: the file view with the sidebar hidden (diff
 	// fills the width) and the history view widened (commit rows grow author/date/
 	// tag columns, including a tagged commit).
@@ -311,7 +320,7 @@ func TestRenderNoWrap(t *testing.T) {
 	}
 	toast := sampleModel()
 	toast.showToast = true
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, overviewWindowed, overviewWindowEmpty, detailWindowed, detailAI, detailHuman, detailNoMods, detailLoading, searched, searchPrompt, finding, hiddenSidebar, wideLog, cleanTree, palette, gsearch, toast} {
+	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, overviewWindowed, overviewWindowEmpty, detailWindowed, detailAI, detailHuman, detailNoMods, detailLoading, searched, searchPrompt, finding, branchPick, hiddenSidebar, wideLog, cleanTree, palette, gsearch, toast} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {

@@ -70,6 +70,8 @@ func (m model) render() string {
 		return m.floatOverlay(screen, m.commitDetailsBox())
 	case m.fileFindActive:
 		return m.floatOverlay(screen, m.fileFindBox())
+	case m.branchPickActive:
+		return m.floatOverlay(screen, m.branchPickBox())
 	case m.showThemePicker:
 		return m.floatOverlay(screen, m.themePickerBox())
 	case m.showPalette:
@@ -1327,7 +1329,7 @@ func (m model) footerView() string {
 		if !m.onBaseBranch() {
 			keys = append(keys, "D "+m.branchDiffLabel())
 		}
-		keys = append(keys, "d details", "S stats", "t theme", "⌕ ctrl+k search", "? help", "q quit")
+		keys = append(keys, "d details", "b branch", "S stats", "t theme", "⌕ ctrl+k search", "? help", "q quit")
 	case viewCommit:
 		keys = []string{
 			"j/k move", "Tab ⇄ pane", "h/l scroll", "f find", "/ search", "[ ] sidebar", "s split", "t theme", "⌕ ctrl+k search", "esc back", "? help", "q quit",
@@ -1379,6 +1381,7 @@ func (m model) helpBox() string {
 		"  Tab          toggle the selected diff on the right half on / off",
 		"  Enter        open the commit's (or working tree's) files",
 		"  d            inspect the selected commit (author, date, full message)",
+		"  b            switch branch — fuzzy-pick one and check it out",
 		"  S            whole-repo Stats — commit count + per-author ranking",
 		"  1 … 5        in Stats: time window — week / month / 6 months / year / all",
 		"  [ / ]        in Stats: narrow / widen that window",

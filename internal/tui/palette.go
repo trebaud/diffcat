@@ -69,6 +69,12 @@ func (m model) paletteActions() []paletteAction {
 			}
 			return nil
 		}},
+		{"Switch branch (check out)", "b", func(m *model) tea.Cmd {
+			if m.mode == viewLog {
+				m.openBranchPicker()
+			}
+			return nil
+		}},
 		{"Choose theme (colors · light/dark · icons)", "t", func(m *model) tea.Cmd {
 			m.showThemePicker = true
 			m.themeSel = m.themeIdx

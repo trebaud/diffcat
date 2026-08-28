@@ -310,6 +310,24 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(sync, repaint)
 
+	case branchSwitchMsg:
+		// The background `git switch` finished. On success reload everything against
+		// the new HEAD right away — the poll would catch it, but only a beat later,
+		// and the switch should read as instant — and reseed the fingerprint so the
+		// poll doesn't repeat the work. A refusal (git's own first stderr line, e.g.
+		// uncommitted changes in the way) lands in the footer flash.
+		if msg.err != nil {
+			m.flash = "switch failed: " + msg.err.Error()
+			return m, nil
+		}
+		// Advance the fingerprint before refreshing, like the poll does: the history
+		// reload inside refresh skips when the fingerprint hasn't moved, and HEAD
+		// just did.
+		m.syncFingerprint = git.Fingerprint(m.repo, m.baseRev)
+		repaint := m.refresh()
+		m.flash = "switched to " + msg.branch
+		return m, repaint
+
 	case editorFinishedMsg:
 		// Back from the editor: the file may have changed under us, so re-read from
 		// disk (and re-seed the sync fingerprint so the poll doesn't immediately
@@ -525,6 +543,42 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	if m.branchPickActive {
+		// The branch switcher is open. Enter checks out the selected branch; Esc
+		// closes; arrows / ctrl+n/p move the selection; the rest edits the query.
+		matches := m.branchPickMatches()
+		switch msg.String() {
+		case "esc":
+			m.branchPickActive = false
+		case "enter":
+			m.branchPickActive = false
+			if m.branchPickSel >= 0 && m.branchPickSel < len(matches) {
+				name := matches[m.branchPickSel].path
+				m.flash = "switching to " + name + "…"
+				return m, switchBranchCmd(m.repo, name)
+			}
+		case "down", "ctrl+n":
+			if m.branchPickSel < len(matches)-1 {
+				m.branchPickSel++
+			}
+		case "up", "ctrl+p":
+			if m.branchPickSel > 0 {
+				m.branchPickSel--
+			}
+		case "backspace":
+			if r := []rune(m.branchPickInput); len(r) > 0 {
+				m.branchPickInput = string(r[:len(r)-1])
+			}
+			m.branchPickSel = 0
+		default:
+			if s := msg.String(); len([]rune(s)) == 1 {
+				m.branchPickInput += s
+				m.branchPickSel = 0
+			}
+		}
+		return m, nil
+	}
+
 	if m.showThemePicker {
 		// The theme picker is open. j/k preview a theme live; T/tab previews the
 		// light↔dark flip; i cycles the icon tier and m toggles motion (both apply
@@ -732,6 +786,14 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "N":
 		m.prevHit()
+		return m, nil
+
+	// --- branch switcher (history view only — the diff views compare against a
+	// fixed base and shouldn't offer a checkout) ---
+	case "b":
+		if m.mode == viewLog {
+			m.openBranchPicker()
+		}
 		return m, nil
 
 	// --- fuzzy file jump (only in the file-tree modes) ---
