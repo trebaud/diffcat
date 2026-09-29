@@ -101,6 +101,7 @@ func (m *model) finishEnterLog() {
 	m.mode = viewLog
 	m.focus = focusFiles
 	m.commitCursor = 0
+	m.logVisual = false
 	// The diff pane starts closed, so the commit list fills the screen. Its diff
 	// is loaded lazily when the reader opens the pane (openLogDiff), not here.
 	m.logDiffOpen = false
@@ -148,12 +149,10 @@ func (m *model) exitLog() {
 // stashes the branch tree so exitCommit restores it verbatim; scopeWorking scopes
 // loadDiff/refresh to `git diff HEAD` rather than the branch base.
 func (m *model) enterWorkingTree() {
-	m.branchFiles = m.files
-	m.branchRows = m.rows
-	m.branchCursor = m.cursor
-
+	m.stashBranchTree()
 	m.scopeWorking = true
 	m.scopeCommit = nil
+	m.scopeRange = nil
 	if files, err := git.ChangedFiles(m.repo, "HEAD"); err == nil {
 		m.files = files
 	} else {
@@ -186,13 +185,10 @@ func (m *model) enterCommit() {
 // list (enterCommit). The caller loads the diff afterward — directly, or via
 // jumpToFile to a chosen path.
 func (m *model) scopeToCommit(c *git.Commit) {
-	// Stash the branch tree so leaving restores it untouched.
-	m.branchFiles = m.files
-	m.branchRows = m.rows
-	m.branchCursor = m.cursor
-
+	m.stashBranchTree()
 	m.scopeCommit = c
 	m.scopeWorking = false
+	m.scopeRange = nil
 	if files, err := git.CommitFiles(m.repo, c.SHA); err == nil {
 		m.files = files
 	} else {
@@ -204,11 +200,20 @@ func (m *model) scopeToCommit(c *git.Commit) {
 	m.focus = focusFiles
 }
 
+// stashBranchTree saves the branch tree before a drill-in repurposes the shared
+// tree fields, so exitCommit can restore it untouched.
+func (m *model) stashBranchTree() {
+	m.branchFiles = m.files
+	m.branchRows = m.rows
+	m.branchCursor = m.cursor
+}
+
 // exitCommit returns from a per-commit tree to the history list, restoring the
 // stashed branch tree and re-previewing the commit's combined diff.
 func (m *model) exitCommit() {
 	m.scopeCommit = nil
 	m.scopeWorking = false
+	m.scopeRange = nil
 	m.files = m.branchFiles
 	m.rows = m.branchRows
 	m.cursor = m.branchCursor
@@ -274,6 +279,11 @@ func (m *model) reloadCommitList() {
 	if c := m.selectedCommit(); c != nil {
 		prevSHA = c.SHA
 	}
+	anchorWorking := m.logWorking && m.logAnchor == 0
+	anchorSHA := ""
+	if c := m.rowCommit(m.logAnchor); c != nil {
+		anchorSHA = c.SHA
+	}
 	m.loadCommits()
 	m.refreshWorkingCount()
 	m.commitListSynced = m.syncFingerprint
@@ -283,6 +293,19 @@ func (m *model) reloadCommitList() {
 		m.commitCursor = 0
 	} else {
 		m.reselectCommit(prevSHA)
+	}
+	// Carry a visual selection's anchor across the reload the same way; if its
+	// commit (or the working-tree row) is gone, the selection no longer means
+	// anything, so drop it.
+	if m.logVisual {
+		switch {
+		case anchorWorking && m.logWorking:
+			m.logAnchor = 0
+		case anchorSHA != "" && m.rowOf(anchorSHA) >= 0:
+			m.logAnchor = m.rowOf(anchorSHA)
+		default:
+			m.logVisual = false
+		}
 	}
 }
 
@@ -324,6 +347,13 @@ func (m *model) loadCommitDiff() {
 	m.hlCache = map[string][]span{}
 	m.pathLexers = map[string]chroma.Lexer{}
 	m.resetSearch()
+
+	// A multi-row visual selection previews the range's net diff instead of the
+	// commit under the cursor (see visual.go).
+	if r := m.selectionRange(); r != nil {
+		m.loadRangeDiff(r)
+		return
+	}
 
 	// The working-tree row previews the combined branch diff against base. Like a
 	// commit's combined diff it spans multiple files, so it rides the same

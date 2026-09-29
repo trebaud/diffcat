@@ -69,6 +69,12 @@ func (m model) paletteActions() []paletteAction {
 			}
 			return nil
 		}},
+		{"Select a commit range (visual)", "v", func(m *model) tea.Cmd {
+			if m.mode == viewLog {
+				m.toggleVisual()
+			}
+			return nil
+		}},
 		{"Switch branch (check out)", "b", func(m *model) tea.Cmd {
 			if m.mode == viewLog {
 				m.openBranchPicker()

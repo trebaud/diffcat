@@ -112,6 +112,14 @@ type model struct {
 	// branch-vs-base diff and is non-empty on any feature branch.
 	workingCount int
 
+	// Visual selection (vim `v`) in the history list. logVisual is true while a
+	// range is being selected; logAnchor is the row (same indexing as
+	// commitCursor) where it started, and the selection spans every row between
+	// the anchor and the cursor. The diff pane and Enter then act on the whole
+	// range's net change (see selectionRange) instead of the single commit.
+	logVisual bool
+	logAnchor int
+
 	// Per-commit drill-in (viewCommit). scopeCommit is the commit whose files the
 	// tree currently shows (nil outside viewCommit); its SHA scopes loadDiff to
 	// that commit's patch. Drilling in repurposes the shared tree fields, so the
@@ -120,8 +128,11 @@ type model struct {
 	// scopeWorking drills the working-tree entry into the same per-commit layout
 	// (viewCommit), but scoped to `git diff HEAD` — the uncommitted changes —
 	// rather than a commit's patch. It and scopeCommit are mutually exclusive.
+	// scopeRange drills a visual selection of several commits into the same
+	// layout, scoped to the range's net diff. It is exclusive with the other two.
 	scopeCommit  *git.Commit
 	scopeWorking bool
+	scopeRange   *commitRange
 	branchFiles  []git.FileChange
 	branchRows   []treeRow
 	branchCursor int
@@ -556,6 +567,8 @@ func (m *model) loadDiff() {
 	switch {
 	case m.scopeCommit != nil:
 		raw = git.CommitFileDiff(m.repo, m.scopeCommit.SHA, f.Path)
+	case m.scopeRange != nil:
+		raw = git.RangeFileDiff(m.repo, m.scopeRange.from, m.scopeRange.to, f.Path, f.Status)
 	case m.scopeWorking:
 		// Working-tree drill-in: the uncommitted delta for this file is its diff
 		// against HEAD (the new side is the working-tree file, so the FileContent
@@ -577,9 +590,12 @@ func (m *model) loadDiff() {
 	if f.Status != "D" {
 		var fl []string
 		var err error
-		if m.scopeCommit != nil {
+		switch {
+		case m.scopeCommit != nil:
 			fl, err = git.FileContentAt(m.repo, m.scopeCommit.SHA, f.Path)
-		} else {
+		case m.scopeRange != nil && m.scopeRange.to != "":
+			fl, err = git.FileContentAt(m.repo, m.scopeRange.to, f.Path)
+		default:
 			fl, err = git.FileContent(m.repo, f.Path)
 		}
 		if err == nil {

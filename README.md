@@ -28,7 +28,7 @@ diffcat is narrower on purpose, its main focus is on making the git diff view ex
 - Unified or side-by-side view (`s`); a theme picker (`t`) with 8 color themes, light/dark, file-type icons, and a reduce-motion toggle
 - Auto-detected base, or any ref via `--base`
 - `e` opens the file under the cursor in your own editor, at the line you were reading
-- Commit history view with per-commit diffs
+- Commit history view with per-commit diffs; `v` visual-selects a run of commits to view their combined net diff
 - Stats dashboard (`S`): contribution calendar, per-author ranking, activity charts, streaks, and a human-vs-AI split that names each agent — over the last week, month, 6 months, year, or all time (`1`–`5`, or `[`/`]`)
 
 ## Demo

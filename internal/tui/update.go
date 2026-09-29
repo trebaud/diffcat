@@ -649,9 +649,20 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case viewOverview:
 			m.exitOverview()
 		case viewLog:
-			if m.logDiffOpen {
+			// Like vim, Esc first leaves visual mode; a second press closes the pane.
+			if m.logVisual {
+				m.exitVisual()
+			} else if m.logDiffOpen {
 				m.closeLogDiff()
 			}
+		}
+		return m, nil
+
+	case "v", "V":
+		// Visual selection over the history list: mark a run of commits, then
+		// Tab/l previews their combined diff and Enter opens its file tree.
+		if m.mode == viewLog {
+			m.toggleVisual()
 		}
 		return m, nil
 
@@ -839,7 +850,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// the working-tree row into the full branch view. (Scroll its preview
 		// instead with l/Tab to focus the diff pane.)
 		if m.mode == viewLog {
-			if m.onWorkingRow() {
+			if m.selectionRange() != nil {
+				m.enterRange()
+			} else if m.onWorkingRow() {
 				m.enterWorkingTree()
 			} else {
 				m.enterCommit()
@@ -1135,6 +1148,21 @@ func (m *model) refresh() (repaint tea.Cmd) {
 	}
 
 	if m.mode == viewCommit {
+		if m.scopeRange != nil && m.scopeRange.working {
+			// A range ending at the working tree is as mutable as the working-tree
+			// drill-in, so rebuild its file set the same way.
+			prevPath := ""
+			if f := m.selectedFile(); f != nil {
+				prevPath = f.Path
+			}
+			if files, err := git.RangeFiles(m.repo, m.scopeRange.from, ""); err == nil {
+				m.files = files
+				m.rebuildTree()
+				m.reselectPath(prevPath)
+			}
+			m.preserveDiffView(m.loadDiff)
+			return
+		}
 		if m.scopeWorking {
 			// The working-tree drill-in is mutable (edits/staging change its file
 			// set), so rebuild it from `git diff HEAD`, holding the selected file

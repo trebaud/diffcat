@@ -49,6 +49,7 @@ var (
 	headingStyle     lipgloss.Style
 	selectedStyle    lipgloss.Style
 	selectedRowStyle lipgloss.Style
+	visualRowStyle   lipgloss.Style // rows inside the history list's visual selection
 	borderStyle      lipgloss.Style
 
 	dirStyle       lipgloss.Style // folder rows in the file tree
@@ -162,6 +163,10 @@ func ApplyTheme(t Theme, isDark bool) {
 	// (degrades to a visible block even in 16-color mode) and never relies on
 	// color alone — the ▸ caret marks the row too.
 	selectedRowStyle = lipgloss.NewStyle().Background(colRowBg).Foreground(colSelect).Bold(true)
+	// Visual-selection rows share the selection bar's background but not its
+	// blue bold ink, so the range reads as one block with the cursor row still
+	// standing out at its moving end.
+	visualRowStyle = lipgloss.NewStyle().Background(colRowBg)
 	borderStyle = lipgloss.NewStyle().Foreground(colBorder)
 
 	// Folders read in the cyan "meta" tone (distinct from the magenta selection

@@ -446,6 +446,78 @@ func CommitFileDiff(repo, sha, path string) string {
 	return strings.TrimLeft(string(out), "\n")
 }
 
+// RangeBase returns the rev a commit range starting at oldest is diffed from:
+// oldest's first parent, or the empty tree when oldest is a root commit. Diffing
+// RangeBase(oldest)..newest yields the range's net change — each path as the
+// newest commit in the range left it — so when several selected commits touch the
+// same lines, the later commit's version wins rather than every intermediate
+// patch being stacked.
+func RangeBase(repo string, oldest Commit) string {
+	if len(oldest.Parents) > 0 {
+		return oldest.Parents[0]
+	}
+	out, err := exec.Command("git", "-C", repo, "hash-object", "-t", "tree", os.DevNull).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// rangeArgs is the rev pair for a range diff. An empty to diffs from against the
+// working tree (staged + unstaged), for a selection that includes the working-
+// tree row.
+func rangeArgs(from, to string) []string {
+	if to == "" {
+		return []string{from}
+	}
+	return []string{from, to}
+}
+
+// RangeDiff returns the net patch between from and to (the working tree when to
+// is empty) as one multi-file patch ready for diff.Parse. Like WorkingDiff,
+// untracked files are omitted from the combined view.
+func RangeDiff(repo, from, to string) string {
+	argv := append([]string{"-C", repo, "diff", "--no-color"}, rangeArgs(from, to)...)
+	out, err := exec.Command("git", argv...).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+// RangeFiles lists the files that differ between from and to, with per-file
+// line stats — the backing list for a multi-commit drill-in. An empty to is the
+// working tree, which also picks up untracked files (see ChangedFiles).
+func RangeFiles(repo, from, to string) ([]FileChange, error) {
+	if to == "" {
+		return ChangedFiles(repo, from)
+	}
+	nameOut, err := exec.Command("git", "-C", repo, "diff", "--name-status", from, to).Output()
+	if err != nil {
+		return nil, fmt.Errorf("git diff --name-status failed: %w", err)
+	}
+	statusByPath, order := parseNameStatus(nameOut)
+
+	numOut, _ := exec.Command("git", "-C", repo, "diff", "--numstat", from, to).Output()
+	stats := parseNumStat(numOut)
+
+	return mergeChanges(statusByPath, order, stats), nil
+}
+
+// RangeFileDiff returns the net patch between from and to for a single path. An
+// empty to is the working tree, where untracked files get FileDiff's synthesized
+// --no-index patch.
+func RangeFileDiff(repo, from, to, path, status string) string {
+	if to == "" {
+		return FileDiff(repo, from, path, status)
+	}
+	out, err := exec.Command("git", "-C", repo, "diff", "--no-color", from, to, "--", path).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
 // FileChange describes one path that differs between the base and the working tree.
 type FileChange struct {
 	Path    string

@@ -209,6 +209,10 @@ func (m model) headerView() string {
 	if m.mode == viewLog {
 		mid := mutedStyle.Render(fmt.Sprintf("  %s · history", branchLabel(m.branch)))
 		count := "  " + headingStyle.Render(fmt.Sprintf("%d commits", m.featureCommitCount()))
+		if m.logVisual {
+			lo, hi := m.visualBounds()
+			count += "  " + selectedStyle.Render(fmt.Sprintf("-- VISUAL -- %d selected", hi-lo+1))
+		}
 		return left + mid + count
 	}
 	if m.mode == viewOverview {
@@ -224,6 +228,10 @@ func (m model) headerView() string {
 		return left + mid + "  " + headingStyle.Render(m.detailAuthor)
 	}
 	if m.mode == viewCommit {
+		if r := m.scopeRange; r != nil {
+			mid := mutedStyle.Render("  history · range " + r.label())
+			return left + mid + "  " + headingStyle.Render("net diff (latest wins)")
+		}
 		if m.scopeWorking {
 			mid := mutedStyle.Render("  history · working tree")
 			return left + mid + "  " + headingStyle.Render("uncommitted changes")
@@ -302,6 +310,9 @@ func (m model) listView(width int) string {
 			if m.scopeWorking {
 				msg = "  no uncommitted changes"
 			}
+			if m.scopeRange != nil {
+				msg = "  no net changes across these commits"
+			}
 		}
 		b.WriteString(mutedStyle.Render(msg))
 		return lipgloss.NewStyle().Width(width).Render(b.String())
@@ -356,8 +367,9 @@ func (m model) commitListView(width int) string {
 	}
 	for i := offset; i < end; i++ {
 		sel := i == m.commitCursor
+		vis := !sel && m.inVisual(i)
 		if m.logWorking && i == 0 {
-			b.WriteString(m.workingRow(sel, width))
+			b.WriteString(m.workingRow(sel, vis, width))
 		} else {
 			ci := i
 			if m.logWorking {
@@ -373,7 +385,7 @@ func (m model) commitListView(width int) string {
 				b.WriteString(commitDivider(m.baseDisplay(), width))
 				b.WriteString("\n")
 			}
-			b.WriteString(m.commitRow(m.commits[ci], sel, width))
+			b.WriteString(m.commitRow(m.commits[ci], sel, vis, width))
 		}
 		b.WriteString("\n")
 	}
@@ -397,7 +409,7 @@ func commitDivider(label string, width int) string {
 // list: a hollow node glyph, a "local" tag in the SHA column, and a summary of
 // the uncommitted changes. It mirrors commitRow's layout so the two read as one
 // list, with a green glyph to flag it as the live working state.
-func (m model) workingRow(selected bool, width int) string {
+func (m model) workingRow(selected, visual bool, width int) string {
 	glyph := "○"
 	n := m.workingCount
 	noun := "files"
@@ -417,19 +429,24 @@ func (m model) workingRow(selected bool, width int) string {
 	if selected {
 		return selectedRowStyle.Width(width).Render(head + subj)
 	}
+	if visual {
+		return visualRowStyle.Width(width).Render(head + subj)
+	}
 	return addedStyle.Render(glyph) + " " + metaStyle.Render(tag) + " " + subj
 }
 
 // commitRow renders one commit line: a node glyph (● commit, ◆ merge), the short
 // SHA, and the subject. The selected row is one continuous highlight bar; an
 // unselected row colorizes the glyph and SHA. Stacked glyphs form the rail.
-func (m model) commitRow(c git.Commit, selected bool, width int) string {
+// visual marks a row inside the history list's visual selection (other than the
+// cursor row), drawn as a plain bar so the range reads as one block.
+func (m model) commitRow(c git.Commit, selected, visual bool, width int) string {
 	glyph := "●"
 	if c.IsMerge() {
 		glyph = "◆"
 	}
 	if m.sidebar == sidebarWide || m.mode == viewLog {
-		return m.commitRowWide(c, glyph, selected, width)
+		return m.commitRowWide(c, glyph, selected, visual, width)
 	}
 	head := glyph + " " + c.Short + " "
 	avail := width - lipgloss.Width(head)
@@ -440,6 +457,9 @@ func (m model) commitRow(c git.Commit, selected bool, width int) string {
 
 	if selected {
 		return selectedRowStyle.Width(width).Render(head + subj)
+	}
+	if visual {
+		return visualRowStyle.Width(width).Render(head + subj)
 	}
 
 	glyphStyle := titleStyle
@@ -454,7 +474,7 @@ func (m model) commitRow(c git.Commit, selected bool, width int) string {
 // author/date right-aligned. The right metadata is dropped first when a row gets
 // too narrow to keep the subject legible. Like commitRow it lays out plain text
 // for exact alignment, then colorizes per segment (the selected row is one bar).
-func (m model) commitRowWide(c git.Commit, glyph string, selected bool, width int) string {
+func (m model) commitRowWide(c git.Commit, glyph string, selected, visual bool, width int) string {
 	head := glyph + " " + c.Short + "  "
 
 	refsPlain, refsStyled := refBadges(c)
@@ -482,8 +502,11 @@ func (m model) commitRowWide(c git.Commit, glyph string, selected bool, width in
 		gap = 1
 	}
 
-	if selected {
+	if selected || visual {
 		row := head + refPart + subj + strings.Repeat(" ", gap) + meta
+		if visual {
+			return visualRowStyle.Width(width).Render(row)
+		}
 		return selectedRowStyle.Width(width).Render(row)
 	}
 
@@ -799,6 +822,10 @@ func (m model) diffView(width int) string {
 func (m model) commitDiffView(width int) string {
 	rows := m.diffViewportHeight()
 	cw := width - m.minimapW(width)
+	if r := m.selectionRange(); r != nil {
+		title := truncateText(r.label(), cw-2-lipgloss.Width(m.splitTag())) + m.splitTag()
+		return m.diffPane(width, title, m.diffWindow(cw, rows))
+	}
 	if m.onWorkingRow() {
 		title := truncateText("working tree · uncommitted changes", cw-2-lipgloss.Width(m.splitTag())) + m.splitTag()
 		return m.diffPane(width, title, m.diffWindow(cw, rows))
@@ -1321,6 +1348,10 @@ func (m model) footerView() string {
 		}
 		return mutedStyle.Render(strings.Join(keys, "  ·  "))
 	case viewLog:
+		if m.logVisual {
+			keys = []string{"j/k extend", "Tab diff", "↵ open range", "v/esc cancel", "? help", "q quit"}
+			break
+		}
 		if m.logDiffOpen {
 			keys = []string{"j/k select", "h/l scroll", "Tab hide diff", "↵ open commit"}
 		} else {
@@ -1329,7 +1360,7 @@ func (m model) footerView() string {
 		if !m.onBaseBranch() {
 			keys = append(keys, "D "+m.branchDiffLabel())
 		}
-		keys = append(keys, "d details", "b branch", "S stats", "t theme", "⌕ ctrl+k search", "? help", "q quit")
+		keys = append(keys, "v select range", "d details", "b branch", "S stats", "t theme", "⌕ ctrl+k search", "? help", "q quit")
 	case viewCommit:
 		keys = []string{
 			"j/k move", "Tab ⇄ pane", "h/l scroll", "f find", "/ search", "[ ] sidebar", "s split", "t theme", "⌕ ctrl+k search", "esc back", "? help", "q quit",
@@ -1380,6 +1411,8 @@ func (m model) helpBox() string {
 		"  j / k        move between entries (the list fills the screen)",
 		"  Tab          toggle the selected diff on the right half on / off",
 		"  Enter        open the commit's (or working tree's) files",
+		"  v / V        visual-select a range of commits; j/k extend it, Tab",
+		"               previews and Enter opens their net diff (latest wins)",
 		"  d            inspect the selected commit (author, date, full message)",
 		"  b            switch branch — fuzzy-pick one and check it out",
 		"  S            whole-repo Stats — commit count + per-author ranking",
@@ -1387,7 +1420,7 @@ func (m model) helpBox() string {
 		"  [ / ]        in Stats: narrow / widen that window",
 		"  ○ local      the working tree: staged + unstaged changes",
 		"  L            return to the history view from anywhere",
-		"  Esc          close the diff pane, then step back (commit tree → history)",
+		"  Esc          leave visual, close the diff pane, then step back",
 		"",
 		headingStyle.Render("  branch diff"),
 	}
