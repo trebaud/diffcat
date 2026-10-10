@@ -191,17 +191,17 @@ func TestEditorTargetInHistoryView(t *testing.T) {
 }
 
 // The Stats pages have no file in scope, an empty tree has no file under the
-// cursor, and a path that left the working tree must report itself rather than
-// silently doing nothing.
+// cursor, and a path that left the working tree — none launch anything, and each
+// says why in the footer rather than silently doing nothing.
 func TestOpenEditorGuards(t *testing.T) {
 	m := model{mode: viewOverview, editor: "vim"}
-	if cmd := m.openEditor(); cmd != nil || m.flash != "" {
-		t.Errorf("stats view should be inert, cmd=%v flash=%q", cmd, m.flash)
+	if cmd := m.openEditor(); cmd != nil || m.flash == "" {
+		t.Errorf("stats view should be inert and explain, cmd=%v flash=%q", cmd, m.flash)
 	}
 
 	m = model{mode: viewBranch, editor: "vim"}
-	if cmd := m.openEditor(); cmd != nil || m.flash != "" {
-		t.Errorf("empty tree should be inert, cmd=%v flash=%q", cmd, m.flash)
+	if cmd := m.openEditor(); cmd != nil || m.flash == "" {
+		t.Errorf("empty tree should be inert and explain, cmd=%v flash=%q", cmd, m.flash)
 	}
 
 	// A file is in scope, but it isn't in the working tree.

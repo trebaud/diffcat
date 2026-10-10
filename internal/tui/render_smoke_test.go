@@ -320,7 +320,15 @@ func TestRenderNoWrap(t *testing.T) {
 	}
 	toast := sampleModel()
 	toast.showToast = true
-	for _, m := range []model{sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, overviewWindowed, overviewWindowEmpty, detailWindowed, detailAI, detailHuman, detailNoMods, detailLoading, searched, searchPrompt, finding, branchPick, hiddenSidebar, wideLog, cleanTree, palette, gsearch, toast} {
+	// The help overlay scrolled to its end, and a wrapped diff with every display
+	// toggle's badge in the title.
+	helpScrolled := sampleModel()
+	helpScrolled.showHelp = true
+	helpScrolled.helpScroll = 999
+	wrapped := sampleModel()
+	wrapped.focus = focusDiff
+	wrapped.wrap, wrapped.ignoreWS = true, true
+	for _, m := range []model{helpScrolled, wrapped, sampleModel(), logSampleModel(), openLog, workingLog, emptyLog, commitSampleModel(), workingCommit, emptyCommit, emptyWorking, shimmer, details, detailsScrolled, overview, overviewScrolled, overviewEmpty, overviewLoading, overviewWindowed, overviewWindowEmpty, detailWindowed, detailAI, detailHuman, detailNoMods, detailLoading, searched, searchPrompt, finding, branchPick, hiddenSidebar, wideLog, cleanTree, palette, gsearch, toast} {
 		for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 18}, {80, 24}, {60, 12}} {
 			m.width, m.height = sz[0], sz[1]
 			for i, line := range strings.Split(m.render(), "\n") {
@@ -365,15 +373,18 @@ func TestFullScreenFill(t *testing.T) {
 		m.focus = focusDiff
 		for _, split := range []bool{false, true} {
 			m.splitView = split
-			for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 24}, {80, 24}, {70, 16}, {60, 12}} {
-				m.width, m.height = sz[0], sz[1]
-				lines := strings.Split(m.render(), "\n")
-				if len(lines) != sz[1] {
-					t.Errorf("mode=%d split=%v %dx%d: %d lines, want %d", m.mode, split, sz[0], sz[1], len(lines), sz[1])
-				}
-				for i, line := range lines {
-					if w := lipgloss.Width(line); w != sz[0] {
-						t.Errorf("mode=%d split=%v %dx%d line %d width %d, want %d", m.mode, split, sz[0], sz[1], i, w, sz[0])
+			for _, wrap := range []bool{false, true} {
+				m.wrap = wrap
+				for _, sz := range [][2]int{{200, 50}, {120, 40}, {100, 24}, {80, 24}, {70, 16}, {60, 12}} {
+					m.width, m.height = sz[0], sz[1]
+					lines := strings.Split(m.render(), "\n")
+					if len(lines) != sz[1] {
+						t.Errorf("mode=%d split=%v wrap=%v %dx%d: %d lines, want %d", m.mode, split, wrap, sz[0], sz[1], len(lines), sz[1])
+					}
+					for i, line := range lines {
+						if w := lipgloss.Width(line); w != sz[0] {
+							t.Errorf("mode=%d split=%v wrap=%v %dx%d line %d width %d, want %d", m.mode, split, wrap, sz[0], sz[1], i, w, sz[0])
+						}
 					}
 				}
 			}
@@ -518,7 +529,7 @@ func TestAuthorDetailNavigation(t *testing.T) {
 	m.width, m.height = 120, 40
 
 	// j moves the ranking cursor; enter opens the author under it.
-	m.moveDown()
+	m.moveFocused(1)
 	if m.overviewCursor != 1 {
 		t.Fatalf("after moveDown, overviewCursor = %d, want 1", m.overviewCursor)
 	}

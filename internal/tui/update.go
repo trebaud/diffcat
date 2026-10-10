@@ -342,6 +342,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseWheelMsg:
+		return m.handleWheel(msg)
 	}
 	return m, nil
 }
@@ -451,8 +454,28 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.showHelp {
-		// Any key dismisses the help overlay.
-		m.showHelp = false
+		// The help overlay scrolls with the usual motions when it's taller than the
+		// screen; ?, q, Esc, or Enter close it (ctrl+c still quits).
+		half := max(1, m.helpBodyRows()/2)
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "j", "down":
+			m.scrollHelp(1)
+		case "k", "up":
+			m.scrollHelp(-1)
+		case "ctrl+d", "ctrl+f", "pgdown", "space", " ":
+			m.scrollHelp(half)
+		case "ctrl+u", "ctrl+b", "pgup":
+			m.scrollHelp(-half)
+		case "g", "home":
+			m.helpScroll = 0
+		case "G", "end":
+			m.scrollHelp(len(m.helpLines()))
+		case "?", "q", "esc", "enter":
+			m.showHelp = false
+			m.helpScroll = 0
+		}
 		m.pendingG = false
 		return m, nil
 	}
@@ -618,12 +641,48 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	key := msg.String()
 
+	// A vim count prefix: digits accumulate until a motion consumes them. On the
+	// Stats pages the number keys pick the time window instead, and a leading 0
+	// isn't a count.
+	if len(key) == 1 && key[0] >= '0' && key[0] <= '9' &&
+		m.mode != viewOverview && m.mode != viewAuthorDetail && (key != "0" || m.count != "") {
+		if len(m.count) < 6 {
+			m.count += key
+		}
+		return m, nil
+	}
+	held := m.count
+	n, counted := m.takeCount()
+
 	// `gg` chord: a pending `g` followed by another `g` jumps to the top of
-	// the focused pane. Any other key cancels the chord and is handled below.
+	// the focused pane (or, with a count, to that line). Any other key cancels
+	// the chord and is handled below.
 	if m.pendingG {
 		m.pendingG = false
 		if key == "g" {
-			m.gotoTop()
+			if counted {
+				m.gotoLine(n)
+			} else {
+				m.gotoTop()
+			}
+			return m, nil
+		}
+	}
+
+	// Bracket chords: `]c` / `[c` step between change blocks, `]f` / `[f` between
+	// files. Any other second key cancels the chord and is handled below.
+	if b := m.pendingBracket; b != "" {
+		m.pendingBracket = ""
+		dir := 1
+		if b == "[" {
+			dir = -1
+		}
+		switch key {
+		case "c":
+			m.jumpChange(dir, n)
+			return m, nil
+		case "f":
+			m.jumpFile(dir, n)
 			return m, nil
 		}
 	}
@@ -633,17 +692,23 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "esc":
-		// Esc only steps back one level toward the history view (the default): a
-		// per-commit (or working-tree) drill-in → the history list; the overview →
-		// wherever it was opened from (the branch diff, the history list, or the
-		// per-commit tree). On the history view it closes the diff pane (back to the
+		// A committed search keeps its highlights until Esc clears them; that comes
+		// before stepping back, like vim's :noh.
+		if m.searchQuery != "" {
+			m.resetSearch()
+			return m, nil
+		}
+		// Otherwise Esc steps back one level toward the history view (the
+		// default): a per-commit (or working-tree) drill-in → the history list; the
+		// branch diff → wherever `D` was pressed; the overview → wherever it was
+		// opened from. On the history view it closes the diff pane (back to the
 		// full-screen commit list), or does nothing when that's already the state —
 		// use q / ctrl+c to quit.
 		switch m.mode {
 		case viewCommit:
 			m.exitCommit()
 		case viewBranch:
-			m.enterLog()
+			m.leaveBranchDiff()
 		case viewAuthorDetail:
 			m.exitAuthorDetail()
 		case viewOverview:
@@ -663,6 +728,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Tab/l previews their combined diff and Enter opens its file tree.
 		if m.mode == viewLog {
 			m.toggleVisual()
+		} else {
+			m.flash = "v: select a commit range from history (L)"
 		}
 		return m, nil
 
@@ -673,7 +740,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.goBranchDiff()
 
 	case "?":
-		m.showHelp = true
+		m.openHelp()
 		return m, nil
 
 	case "d":
@@ -683,6 +750,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.detailsCommit() != nil {
 			m.showCommitDetails = true
 			m.detailsScroll = 0
+		} else {
+			m.flash = "d: no commit here — pick one in history (L)"
 		}
 		return m, nil
 
@@ -691,6 +760,9 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// at the line the diff cursor is on. Inert when no editor is configured
 		// (the footer says so) or nothing is in scope.
 		return m, m.openEditor()
+
+	case "y":
+		return m, m.copyUnderCursor()
 
 	case "r":
 		repaint := m.refresh()
@@ -704,8 +776,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, m.toggleStats()
 
 	case "1", "2", "3", "4", "5":
-		// Stats: jump straight to a time window (last week … all time). The number
-		// keys mean nothing in the diff views, so they're inert there.
+		// Stats: jump straight to a time window (last week … all time). Elsewhere
+		// digits are a count prefix, handled above.
 		if m.mode == viewOverview || m.mode == viewAuthorDetail {
 			for i, r := range statsRanges {
 				if r.key == key {
@@ -716,19 +788,15 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "s":
-		// Toggle unified ↔ side-by-side. Row counts differ between modes, so
-		// reset to the top to keep the scroll position sensible. Expansions are
-		// about which lines are revealed, not layout, so they're preserved.
-		// Inert in the commit-history view, whose right pane is a fixed per-commit
-		// preview rather than an interactive diff.
-		if m.mode == viewLog {
-			return m, nil
-		}
-		m.splitView = !m.splitView
-		m.diffOffset = 0
-		m.diffCursor = 0
-		m.rebuildView()
-		m.clampDiffHOffset()
+		m.toggleSplit()
+		return m, nil
+
+	case "w":
+		m.toggleWrap()
+		return m, nil
+
+	case "W":
+		m.toggleWhitespace()
 		return m, nil
 
 	case "t":
@@ -755,48 +823,57 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.paletteSel = 0
 		return m, nil
 
-	// --- sidebar collapse / expand (`[` narrows toward hidden, `]` widens) ---
-	// On the Stats pages there is no sidebar to size; the same keys step the time
-	// window instead (`]` widens toward all time, `[` narrows toward the last week).
-	case "]":
-		// Widen the sidebar: hidden → normal → wide. A wide sidebar surfaces extra
-		// commit metadata (author, date, tags) in the history list. Disabled in the
-		// commit-history view, where the sidebar is pinned to ~half the pane.
+	// --- bracket chords (`]c` / `[f` …); on the Stats pages there are no changes
+	// or files to step, so the same keys step the time window instead (`]` widens
+	// toward all time, `[` narrows toward the last week) ---
+	case "]", "[":
 		if m.mode == viewOverview || m.mode == viewAuthorDetail {
-			return m, m.cycleStatsRange(1)
-		}
-		if m.mode != viewLog && m.sidebar < sidebarWide {
-			m.sidebar++
-		}
-		return m, nil
-	case "[":
-		// Narrow the sidebar: wide → normal → hidden. Collapsing fully hands the
-		// whole width to the diff, so move focus there since the list is gone.
-		if m.mode == viewOverview || m.mode == viewAuthorDetail {
-			return m, m.cycleStatsRange(-1)
-		}
-		if m.mode != viewLog && m.sidebar > sidebarHidden {
-			m.sidebar--
-			if m.sidebar == sidebarHidden {
-				m.focus = focusDiff
+			dir := 1
+			if key == "[" {
+				dir = -1
 			}
+			return m, m.cycleStatsRange(dir)
 		}
+		m.pendingBracket = key
+		m.count = held // the count belongs to the chord's motion
+		return m, nil
+
+	// --- sidebar width (`<` narrows toward hidden, `>` widens) ---
+	case ">", "<":
+		m.resizeSidebar(key)
+		return m, nil
+
+	// --- file stepping (also `]f` / `[f`) ---
+	case "J":
+		m.jumpFile(1, n)
+		return m, nil
+	case "K":
+		m.jumpFile(-1, n)
 		return m, nil
 
 	// --- diff search (`/` to enter a query, n/N to step through matches) ---
 	case "/":
 		// Only meaningful where a diff is showing; harmless (an empty prompt) on a
-		// folder or empty tree. Not in the overview, which has no diff pane.
-		if m.mode != viewOverview {
-			m.searchActive = true
-			m.searchInput = ""
+		// folder or empty tree. Not on the Stats pages, which have no diff pane.
+		if m.mode == viewOverview || m.mode == viewAuthorDetail {
+			m.flash = "/: nothing to search on the Stats pages"
+			return m, nil
 		}
+		m.searchActive = true
+		m.searchInput = ""
 		return m, nil
-	case "n":
-		m.nextHit()
-		return m, nil
-	case "N":
-		m.prevHit()
+	case "n", "N":
+		if m.searchQuery == "" {
+			m.flash = key + ": no active search — / to search the diff"
+			return m, nil
+		}
+		for ; n > 0; n-- {
+			if key == "n" {
+				m.nextHit()
+			} else {
+				m.prevHit()
+			}
+		}
 		return m, nil
 
 	// --- branch switcher (history view only — the diff views compare against a
@@ -804,6 +881,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "b":
 		if m.mode == viewLog {
 			m.openBranchPicker()
+		} else {
+			m.flash = "b: switch branches from history (L)"
 		}
 		return m, nil
 
@@ -813,6 +892,8 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.fileFindActive = true
 			m.fileFindInput = ""
 			m.fileFindSel = 0
+		} else if m.mode == viewLog {
+			m.flash = "f: open a commit (↵) to find files in it"
 		}
 		return m, nil
 
@@ -822,11 +903,18 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "h", "left":
 		// In the history view the diff pane is closed by default; there's nothing to
-		// scroll until Tab opens it.
-		if m.mode == viewLog && !m.logDiffOpen {
-			return m, nil
+		// scroll until Tab opens it. Once open, `h` at the left edge closes it again —
+		// the mirror of `l` opening it.
+		if m.mode == viewLog {
+			if m.logDiffOpen && m.diffHOffset == 0 {
+				m.closeLogDiff()
+				return m, nil
+			}
+			if !m.logDiffOpen {
+				return m, nil
+			}
 		}
-		m.scrollDiffH(-hScrollStep)
+		m.scrollDiffH(-hScrollStep * n)
 		return m, nil
 	case "l", "right":
 		// In the history view the diff pane is closed by default; Tab opens it on the
@@ -835,7 +923,7 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.openLogDiff()
 			return m, nil
 		}
-		m.scrollDiffH(hScrollStep)
+		m.scrollDiffH(hScrollStep * n)
 		return m, nil
 	case "enter", "o":
 		// Stats dashboard: open the selected contributor's detail page (kicking the
@@ -866,41 +954,151 @@ func (m model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// On a file row: open its diff and move into the diff pane. (The tree
-		// cursor only ever rests on files — folder rows are skipped by j/k — so
-		// there's no folder-fold case to handle here.)
+		// On a file row: its diff is already previewed, so move into the diff pane.
+		// (The tree cursor only ever rests on files — folder rows are skipped by
+		// j/k — so there's no folder-fold case to handle here.)
 		m.focus = focusDiff
 		return m, nil
 
 	// --- motions within the focused pane ---
 	case "j", "down":
-		m.moveDown()
+		m.moveFocused(n)
 		return m, nil
 	case "k", "up":
-		m.moveUp()
+		m.moveFocused(-n)
 		return m, nil
 	case "g":
 		m.pendingG = true // wait for the second `g`
+		m.count = held
 		return m, nil
 	case "G", "end":
-		m.gotoBottom()
+		if counted {
+			m.gotoLine(n)
+		} else {
+			m.gotoBottom()
+		}
 		return m, nil
 
 	// --- paging: half/full page through the focused pane ---
 	case "ctrl+d":
-		m.pageFocused(m.diffViewportHeight() / 2)
+		m.pageFocused(n * m.diffViewportHeight() / 2)
 		return m, nil
 	case "ctrl+u":
-		m.pageFocused(-m.diffViewportHeight() / 2)
+		m.pageFocused(-n * m.diffViewportHeight() / 2)
 		return m, nil
-	case "ctrl+f", "pgdown", " ":
-		m.pageFocused(m.diffViewportHeight())
+	case "ctrl+f", "pgdown", " ", "space":
+		m.pageFocused(n * m.diffViewportHeight())
 		return m, nil
 	case "ctrl+b", "pgup":
-		m.pageFocused(-m.diffViewportHeight())
+		m.pageFocused(-n * m.diffViewportHeight())
 		return m, nil
 	}
 	return m, nil
+}
+
+// openHelp shows the keybindings overlay from the top. The first time the reader
+// opens it, the first-run hint has done its job and retires for good.
+func (m *model) openHelp() {
+	m.showHelp = true
+	m.helpScroll = 0
+	m.showToast = false
+	if !m.firstRunDone {
+		m.firstRunDone = true
+		markFirstRunDone(m.repo)
+	}
+}
+
+// toggleSplit flips unified ↔ side-by-side. Row counts differ between modes, so
+// it resets to the top to keep the scroll position sensible; expansions are about
+// which lines are revealed, not layout, so they're preserved. The choice is
+// remembered for the next session.
+func (m *model) toggleSplit() {
+	switch m.mode {
+	case viewOverview, viewAuthorDetail:
+		return
+	case viewLog:
+		// The history preview is a fixed multi-file patch rather than an
+		// interactive per-file diff.
+		m.flash = "s: split view applies to file diffs — ↵ to open the commit"
+		return
+	}
+	m.splitView = !m.splitView
+	m.diffOffset = 0
+	m.diffCursor = 0
+	m.rebuildView()
+	m.clampDiffHOffset()
+	m.persistPrefs()
+}
+
+// toggleWrap flips soft-wrap for long lines. Wrapped lines have nothing to scroll
+// sideways, so the horizontal offset resets; the cursor row stays on screen.
+func (m *model) toggleWrap() {
+	if m.mode == viewOverview || m.mode == viewAuthorDetail {
+		return
+	}
+	m.wrap = !m.wrap
+	m.diffHOffset = 0
+	m.clampDiffOffset()
+	m.ensureCursorVisible()
+	m.persistPrefs()
+	if m.wrap {
+		m.flash = "wrap on — long lines continue below"
+	} else {
+		m.flash = "wrap off — h / l scroll long lines"
+	}
+}
+
+// toggleWhitespace flips hiding whitespace-only changes (`git diff -w`) and
+// reloads the visible diff. Deliberately not persisted: silently hiding changes in
+// a later session would be a trap.
+func (m *model) toggleWhitespace() {
+	if m.mode == viewOverview || m.mode == viewAuthorDetail {
+		return
+	}
+	m.ignoreWS = !m.ignoreWS
+	git.IgnoreWhitespace = m.ignoreWS
+	// Every cached patch was produced under the old setting.
+	m.commitDiffCache = map[string][]diff.Line{}
+	m.gsCode = nil
+	if m.mode == viewLog {
+		if m.logDiffOpen {
+			m.loadCommitDiff()
+		}
+	} else {
+		m.loadDiff()
+	}
+	if m.ignoreWS {
+		m.flash = "ignoring whitespace changes (W to show them)"
+	} else {
+		m.flash = "showing whitespace changes"
+	}
+}
+
+// resizeSidebar is `>` (widen: hidden → normal → wide) and `<` (narrow).
+// Collapsing fully hands the whole width to the diff, so focus moves there since
+// the list is gone. The history view pins its sidebar to ~half the pane.
+func (m *model) resizeSidebar(key string) {
+	switch m.mode {
+	case viewOverview, viewAuthorDetail:
+		return
+	case viewLog:
+		m.flash = "the history list's width is fixed — ↵ a commit for a resizable tree"
+		return
+	}
+	switch {
+	case key == ">" && m.sidebar < sidebarWide:
+		m.sidebar++
+	case key == "<" && m.sidebar > sidebarHidden:
+		m.sidebar--
+		if m.sidebar == sidebarHidden {
+			m.focus = focusDiff
+		}
+	default:
+		return
+	}
+	m.clampDiffOffset()
+	m.ensureCursorVisible()
+	m.persistPrefs()
 }
 
 // setTheme applies theme idx in the given light/dark variant, rebuilding the
@@ -917,17 +1115,21 @@ func (m *model) setTheme(idx int, dark bool) {
 	m.hlCache = map[string][]span{}
 }
 
-// persistPrefs writes the current theme/icon/motion preferences to the config
-// file (best-effort — a write failure is silently ignored, the in-session choice
-// still stands).
+// persistPrefs writes the current appearance and layout preferences to the
+// config file (best-effort — a write failure is silently ignored, the in-session
+// choice still stands). It updates the file in place so hand-written keys the
+// TUI doesn't manage (the editor) survive.
 func (m model) persistPrefs() {
+	cfg := loadConfig()
 	dark := m.dark
-	_ = saveConfig(userConfig{
-		Theme:        themes[m.themeIdx].Name,
-		Icons:        m.iconSet.String(),
-		ReduceMotion: m.reduceMotion,
-		Dark:         &dark,
-	})
+	cfg.Theme = themes[m.themeIdx].Name
+	cfg.Icons = m.iconSet.String()
+	cfg.ReduceMotion = m.reduceMotion
+	cfg.Dark = &dark
+	cfg.Split = m.splitView
+	cfg.Wrap = m.wrap
+	cfg.Sidebar = sidebarNames[m.sidebar]
+	_ = saveConfig(cfg)
 }
 
 func (m *model) toggleFocus() {
@@ -954,32 +1156,19 @@ func (m *model) toggleFocus() {
 	}
 }
 
-// moveDown/moveUp dispatch j/k to the focused pane: in viewLog the left pane is
-// the commit list, otherwise it's the file tree; the right pane is always the
-// diff's line cursor.
-func (m *model) moveDown() {
+// moveFocused dispatches j/k (delta rows, signed; a count prefix scales it) to
+// the focused pane: in viewLog the left pane is the commit list, otherwise it's
+// the file tree; the right pane is always the diff's line cursor.
+func (m *model) moveFocused(delta int) {
 	switch {
 	case m.mode == viewOverview:
-		m.moveOverviewCursor(1)
+		m.moveOverviewCursor(delta)
 	case m.focus != focusFiles:
-		m.moveDiffCursor(1)
+		m.moveDiffCursor(delta)
 	case m.mode == viewLog:
-		m.moveCommitCursor(1)
+		m.moveCommitCursor(delta)
 	default:
-		m.moveCursor(1)
-	}
-}
-
-func (m *model) moveUp() {
-	switch {
-	case m.mode == viewOverview:
-		m.moveOverviewCursor(-1)
-	case m.focus != focusFiles:
-		m.moveDiffCursor(-1)
-	case m.mode == viewLog:
-		m.moveCommitCursor(-1)
-	default:
-		m.moveCursor(-1)
+		m.moveCursor(delta)
 	}
 }
 
@@ -1316,7 +1505,11 @@ func (m *model) goHistory() tea.Cmd {
 // it's inert. Shared by the `D` key and the command palette.
 func (m *model) goBranchDiff() tea.Cmd {
 	if m.onBaseBranch() {
+		m.flash = "D: you're on the base branch — nothing to diff against"
 		return nil
+	}
+	if m.mode != viewBranch {
+		m.snapshotBack()
 	}
 	if m.mode == viewAuthorDetail {
 		m.exitAuthorDetail()

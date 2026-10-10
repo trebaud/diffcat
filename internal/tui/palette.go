@@ -25,17 +25,7 @@ type paletteAction struct {
 // empty query; the fuzzy filter reorders by score once the reader types.
 func (m model) paletteActions() []paletteAction {
 	return []paletteAction{
-		{"Toggle unified / side-by-side diff", "s", func(m *model) tea.Cmd {
-			if m.mode == viewLog {
-				return nil
-			}
-			m.splitView = !m.splitView
-			m.diffOffset = 0
-			m.diffCursor = 0
-			m.rebuildView()
-			m.clampDiffHOffset()
-			return nil
-		}},
+		{"Toggle unified / side-by-side diff", "s", func(m *model) tea.Cmd { m.toggleSplit(); return nil }},
 		{"Search the diff", "/", func(m *model) tea.Cmd {
 			if m.mode != viewOverview {
 				m.searchActive = true
@@ -60,15 +50,15 @@ func (m model) paletteActions() []paletteAction {
 		{"Stats: last 6 months", "3", statsRangeAction(2)},
 		{"Stats: last year", "4", statsRangeAction(3)},
 		{"Stats: all time", "5", statsRangeAction(statsRangeAll)},
-		{"Cycle sidebar width", "[ ]", func(m *model) tea.Cmd {
-			if m.mode != viewOverview && m.mode != viewLog {
-				m.sidebar = (m.sidebar + 1) % 3
-				if m.sidebar == sidebarHidden {
-					m.focus = focusDiff
-				}
-			}
-			return nil
-		}},
+		{"Narrow the sidebar", "<", func(m *model) tea.Cmd { m.resizeSidebar("<"); return nil }},
+		{"Widen the sidebar", ">", func(m *model) tea.Cmd { m.resizeSidebar(">"); return nil }},
+		{"Next change", "]c", func(m *model) tea.Cmd { m.jumpChange(1, 1); return nil }},
+		{"Previous change", "[c", func(m *model) tea.Cmd { m.jumpChange(-1, 1); return nil }},
+		{"Next file", "J", func(m *model) tea.Cmd { m.jumpFile(1, 1); return nil }},
+		{"Previous file", "K", func(m *model) tea.Cmd { m.jumpFile(-1, 1); return nil }},
+		{"Toggle soft-wrap", "w", func(m *model) tea.Cmd { m.toggleWrap(); return nil }},
+		{"Toggle ignore whitespace", "W", func(m *model) tea.Cmd { m.toggleWhitespace(); return nil }},
+		{"Copy SHA / path / path:line", "y", func(m *model) tea.Cmd { return m.copyUnderCursor() }},
 		{"Select a commit range (visual)", "v", func(m *model) tea.Cmd {
 			if m.mode == viewLog {
 				m.toggleVisual()
@@ -104,7 +94,12 @@ func (m model) paletteActions() []paletteAction {
 			}
 			return repaint
 		}},
-		{"Show keybindings help", "?", func(m *model) tea.Cmd { m.showHelp = true; return nil }},
+		{"Show keybindings help", "?", func(m *model) tea.Cmd { m.openHelp(); return nil }},
+		{"Show the getting-started tip", "", func(m *model) tea.Cmd {
+			m.showToast = true
+			m.toastStart = m.animFrame
+			return nil
+		}},
 		{"Quit diffcat", "q", func(m *model) tea.Cmd { return tea.Quit }},
 	}
 }

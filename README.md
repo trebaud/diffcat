@@ -25,7 +25,9 @@ diffcat is narrower on purpose, its main focus is on making the git diff view ex
 
 - TUI with native vim keybindings
 - GitHub-style diffs: green/red tints, line-number gutters, syntax highlighting, surrounding-line expansion
-- Unified or side-by-side view (`s`); a theme picker (`t`) with 8 color themes, light/dark, file-type icons, and a reduce-motion toggle
+- Unified or side-by-side view (`s`), soft-wrap for long lines (`w`), and hiding whitespace-only changes (`W`); a theme picker (`t`) with 8 color themes, light/dark, file-type icons, and a reduce-motion toggle
+- Review motions: `]c` / `[c` step between changes, `J` / `K` (or `]f` / `[f`) between files, vim counts (`5j`, `42G`), and the mouse wheel scrolls the pane under the pointer
+- `y` copies what's under the cursor: a commit SHA, a file path, or `path:line` (OSC 52, so it works over ssh)
 - Auto-detected base, or any ref via `--base`
 - `e` opens the file under the cursor in your own editor, at the line you were reading
 - Commit history view with per-commit diffs; `v` visual-selects a run of commits to view their combined net diff
@@ -99,7 +101,11 @@ It's vim unless you say otherwise. Name another in
 }
 ```
 
-The value is a command, so flags are fine (`"code -w"`, `"emacsclient -nw"`).
+Layout choices are remembered there too: side-by-side (`"split": true`),
+soft-wrap (`"wrap": true`), and the sidebar width (`"sidebar"`: `"hidden"`,
+`"normal"`, or `"wide"`, set with `<` / `>` in the TUI).
+
+The editor value is a command, so flags are fine (`"code -w"`, `"emacsclient -nw"`).
 Precedence is `--editor` → `DIFFCAT_EDITOR` → config → `$VISUAL` → `$EDITOR` →
 `vim`.
 

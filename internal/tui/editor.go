@@ -181,10 +181,16 @@ func (m model) editorTarget() (string, int) {
 // editorFinishedMsg.
 func (m *model) openEditor() tea.Cmd {
 	if m.mode == viewOverview || m.mode == viewAuthorDetail {
-		return nil // the Stats pages have no file in scope
+		m.flash = "e: no file on the Stats pages"
+		return nil
 	}
 	path, line := m.editorTarget()
 	if path == "" {
+		if m.mode == viewLog && !m.logDiffOpen {
+			m.flash = "e: open the diff (Tab) and put the cursor on a file"
+		} else {
+			m.flash = "e: no file under the cursor"
+		}
 		return nil
 	}
 	abs := filepath.Join(m.repo, path)

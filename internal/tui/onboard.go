@@ -49,7 +49,7 @@ func rainbowBar(n, frame int) string {
 // pointing at help and global search. It dims as it ages so the fade-out
 // reads even on a single line.
 func (m model) toastText() string {
-	hint := "✨ new here? press ?  for help  ·  ctrl+k  to search commits, files & code"
+	hint := "✨ new here? press ? for help  ·  ctrl+k  to search commits, files & code"
 	age := m.animFrame - m.toastStart
 	// Brighten early, settle to muted as it nears its end, so clearing reads as a
 	// fade rather than a snap.

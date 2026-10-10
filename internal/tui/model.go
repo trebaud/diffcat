@@ -35,7 +35,7 @@ const (
 	viewAuthorDetail                 // full-screen single-contributor Stats page (opened from viewOverview)
 )
 
-// sidebarSize controls how wide the left pane is, cycled with `[` / `]`.
+// sidebarSize controls how wide the left pane is, stepped with `<` / `>`.
 // sidebarHidden collapses it entirely for a full-width diff; sidebarWide opens it
 // up so the history list can show author/date/tags alongside each commit.
 type sidebarSize int
@@ -53,8 +53,26 @@ const (
 type model struct {
 	mode     viewMode    // viewLog (history, default) or viewBranch (file/diff)
 	focus    focusPane   // pane that j/k/gg/G operate on
-	sidebar  sidebarSize // left-pane width: hidden / normal / wide (`[` / `]`)
+	sidebar  sidebarSize // left-pane width: hidden / normal / wide (`<` / `>`)
 	pendingG bool        // first half of the `gg` chord was pressed
+
+	// pendingBracket holds the first half of a bracket chord ("[" or "]"), waiting
+	// for its motion: `c` steps to the previous/next change, `f` to the
+	// previous/next file. count is a vim count prefix being typed ("12" before
+	// `j`), consumed by the next motion and shown in the footer meanwhile.
+	pendingBracket string
+	count          string
+
+	// wrap soft-wraps long diff lines onto continuation rows instead of cutting
+	// them at the pane edge (horizontal scrolling is moot then). ignoreWS hides
+	// whitespace-only edits by diffing with `-w` (mirrored into git.IgnoreWhitespace).
+	wrap     bool
+	ignoreWS bool
+
+	// branchBack remembers where the branch diff (`D`) was opened from, so Esc
+	// returns there — the same commit, drill-in, or selection — rather than to the
+	// top of the history list. nil when opened some other way.
+	branchBack *navBack
 
 	// loading is true between launch and the moment the background startup gather
 	// lands (startupMsg). While set, View shows a loading screen and key handling
@@ -227,7 +245,8 @@ type model struct {
 	// (BranchHistory) on the way back is pure latency. See reloadCommitList.
 	commitListSynced string
 
-	showHelp bool
+	showHelp   bool
+	helpScroll int // first visible line of the help overlay when it overflows the screen
 
 	// editor is the resolved editor command (`e` opens the file under the cursor
 	// in it); empty when none is configured. flash is a transient one-line message
@@ -344,7 +363,9 @@ func newModel(repo, base, baseName, baseRev string, baseIsDefault bool, r resolv
 	m := model{
 		loading:         true,
 		mode:            viewLog,
-		sidebar:         sidebarNormal,
+		sidebar:         r.sidebar,
+		splitView:       r.split,
+		wrap:            r.wrap,
 		repo:            repo,
 		base:            base,
 		baseName:        baseName,
@@ -371,14 +392,14 @@ func newModel(repo, base, baseName, baseRev string, baseIsDefault bool, r resolv
 		historyComputing: map[int]bool{},
 	}
 
-	// Restore onboarding state. The one-time first-run hint is a playful touch; it
-	// bows out under reduce-motion (no tick to drive or auto-dismiss it).
+	// Restore onboarding state. The first-run hint greets every launch until the
+	// reader has opened help once (see the `?` key), so a hint dismissed by a stray
+	// keypress comes back next time. It bows out under reduce-motion (no tick to
+	// drive or auto-dismiss it).
 	st := loadState()
 	m.firstRunDone = st.FirstRunDone
 	if !r.reduceMotion && !m.firstRunDone {
 		m.showToast = true
-		markFirstRunDone(repo)
-		m.firstRunDone = true
 	}
 
 	// The heavy git work (change list, history, status) is gathered off the launch
@@ -577,9 +598,12 @@ func (m *model) loadDiff() {
 	default:
 		raw = git.FileDiff(m.repo, m.base, f.Path, f.Status)
 	}
-	if raw == "" {
+	switch {
+	case raw == "" && m.ignoreWS && !f.Binary():
+		m.diff = []diff.Line{{Kind: diff.Meta, Text: "(only whitespace changes — W to show them)"}}
+	case raw == "":
 		m.diff = []diff.Line{{Kind: diff.Meta, Text: "(no textual diff — binary or empty)"}}
-	} else {
+	default:
 		m.diff = diff.Parse(raw)
 	}
 	// Context expansion reveals the new side of the diff. For a branch diff that
@@ -736,6 +760,9 @@ func (m model) sidebarWidth() int {
 
 func (m *model) clampDiffOffset() {
 	max := m.totalDiffRows() - m.diffViewportHeight()
+	if m.wrap {
+		max = m.maxWrapOffset()
+	}
 	if max < 0 {
 		max = 0
 	}
@@ -810,10 +837,20 @@ func (m *model) clampDiffCursor() {
 }
 
 // ensureCursorVisible scrolls the diff pane just enough to keep the cursor row
-// inside the viewport.
+// inside the viewport. Under soft-wrap rows can be several screen lines tall, so
+// it sums their heights rather than counting rows.
 func (m *model) ensureCursorVisible() {
 	if m.diffCursor < m.diffOffset {
 		m.diffOffset = m.diffCursor
+	}
+	if m.wrap {
+		vh := m.diffViewportHeight()
+		m.diffOffset = max(m.diffOffset, m.diffCursor-vh+1) // every row is ≥ 1 line
+		for m.diffOffset < m.diffCursor && m.rowsHeight(m.diffOffset, m.diffCursor) > vh {
+			m.diffOffset++
+		}
+		m.clampDiffOffset()
+		return
 	}
 	if bottom := m.diffOffset + m.diffViewportHeight() - 1; m.diffCursor > bottom {
 		m.diffOffset = m.diffCursor - m.diffViewportHeight() + 1

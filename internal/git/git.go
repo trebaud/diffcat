@@ -407,11 +407,28 @@ func isRemoteRef(ref string, remotes map[string]bool) bool {
 	return i > 0 && remotes[ref[:i]]
 }
 
+// IgnoreWhitespace makes every patch-producing call below pass `-w`, so
+// whitespace-only edits drop out of the diff. File lists and line counts are left
+// alone: a file whose change is all whitespace still appears, just with an empty
+// patch. Toggled from the TUI (`W`); it's process-wide because every diff the
+// viewer shows should agree on it.
+var IgnoreWhitespace bool
+
+// withWS builds a git argv: the leading args, `-w` when IgnoreWhitespace is set,
+// then the trailing args (revisions, `--`, paths), which must come after options.
+func withWS(lead []string, rest ...string) []string {
+	argv := append([]string{}, lead...)
+	if IgnoreWhitespace {
+		argv = append(argv, "-w")
+	}
+	return append(argv, rest...)
+}
+
 // CommitDiff returns the patch a single commit introduced, ready for diff.Parse.
 // `git show --format=` drops the commit-message header and emits a plain unified
 // diff; it handles root commits and merges (combined diff) without special-casing.
 func CommitDiff(repo, sha string) string {
-	out, err := exec.Command("git", "-C", repo, "show", "--no-color", "--format=", "--patch", sha).Output()
+	out, err := exec.Command("git", withWS([]string{"-C", repo, "show", "--no-color", "--format=", "--patch"}, sha)...).Output()
 	if err != nil {
 		return ""
 	}
@@ -439,7 +456,7 @@ func CommitFiles(repo, sha string) ([]FileChange, error) {
 // CommitFileDiff returns one commit's patch for a single path, ready for
 // diff.Parse. Like CommitDiff it strips the message header via --format=.
 func CommitFileDiff(repo, sha, path string) string {
-	out, err := exec.Command("git", "-C", repo, "show", "--no-color", "--format=", "--patch", sha, "--", path).Output()
+	out, err := exec.Command("git", withWS([]string{"-C", repo, "show", "--no-color", "--format=", "--patch"}, sha, "--", path)...).Output()
 	if err != nil {
 		return ""
 	}
@@ -477,7 +494,7 @@ func rangeArgs(from, to string) []string {
 // is empty) as one multi-file patch ready for diff.Parse. Like WorkingDiff,
 // untracked files are omitted from the combined view.
 func RangeDiff(repo, from, to string) string {
-	argv := append([]string{"-C", repo, "diff", "--no-color"}, rangeArgs(from, to)...)
+	argv := withWS([]string{"-C", repo, "diff", "--no-color"}, rangeArgs(from, to)...)
 	out, err := exec.Command("git", argv...).Output()
 	if err != nil {
 		return ""
@@ -511,7 +528,7 @@ func RangeFileDiff(repo, from, to, path, status string) string {
 	if to == "" {
 		return FileDiff(repo, from, path, status)
 	}
-	out, err := exec.Command("git", "-C", repo, "diff", "--no-color", from, to, "--", path).Output()
+	out, err := exec.Command("git", withWS([]string{"-C", repo, "diff", "--no-color"}, from, to, "--", path)...).Output()
 	if err != nil {
 		return ""
 	}
@@ -775,10 +792,10 @@ func countLines(path string) (int, int) {
 // against /dev/null.
 func FileDiff(repo, base, path string, status string) string {
 	if status == "?" {
-		out, _ := exec.Command("git", "-C", repo, "diff", "--no-index", "--", os.DevNull, path).Output()
+		out, _ := exec.Command("git", withWS([]string{"-C", repo, "diff", "--no-index"}, "--", os.DevNull, path)...).Output()
 		return string(out)
 	}
-	out, err := exec.Command("git", "-C", repo, "diff", base, "--", path).Output()
+	out, err := exec.Command("git", withWS([]string{"-C", repo, "diff"}, base, "--", path)...).Output()
 	if err != nil {
 		return ""
 	}
@@ -794,7 +811,7 @@ func FileDiff(repo, base, path string, status string) string {
 // the index so they're omitted from this combined view; the per-file drill-in
 // still shows them via FileDiff's --no-index path.
 func WorkingDiff(repo string) string {
-	out, err := exec.Command("git", "-C", repo, "diff", "--no-color", "HEAD").Output()
+	out, err := exec.Command("git", withWS([]string{"-C", repo, "diff", "--no-color"}, "HEAD")...).Output()
 	if err != nil {
 		return ""
 	}

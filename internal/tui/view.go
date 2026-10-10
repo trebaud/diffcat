@@ -25,6 +25,9 @@ func (m model) View() tea.View {
 	// the whole screen light (nil in dark mode = keep the terminal's own colors).
 	v.BackgroundColor = colCanvas
 	v.ForegroundColor = colText
+	// Wheel events scroll the pane under the pointer. Most terminals still select
+	// text with shift (option in iTerm) held while dragging.
+	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
 
@@ -216,7 +219,7 @@ func (m model) headerView() string {
 		return left + mid + count
 	}
 	if m.mode == viewOverview {
-		mid := mutedStyle.Render(fmt.Sprintf("  %s · stats · %s", branchLabel(m.branch), m.statsRangeLabel()))
+		mid := mutedStyle.Render(fmt.Sprintf("  %s · history › stats · %s", branchLabel(m.branch), m.statsRangeLabel()))
 		stat := ""
 		if m.historyComputed {
 			stat = "  " + headingStyle.Render(fmt.Sprintf("%d commits", m.historyStats.Commits))
@@ -224,16 +227,16 @@ func (m model) headerView() string {
 		return left + mid + stat
 	}
 	if m.mode == viewAuthorDetail {
-		mid := mutedStyle.Render(fmt.Sprintf("  %s · stats", branchLabel(m.branch)))
+		mid := mutedStyle.Render(fmt.Sprintf("  %s · history › stats ›", branchLabel(m.branch)))
 		return left + mid + "  " + headingStyle.Render(m.detailAuthor)
 	}
 	if m.mode == viewCommit {
 		if r := m.scopeRange; r != nil {
-			mid := mutedStyle.Render("  history · range " + r.label())
+			mid := mutedStyle.Render("  history › range " + r.label())
 			return left + mid + "  " + headingStyle.Render("net diff (latest wins)")
 		}
 		if m.scopeWorking {
-			mid := mutedStyle.Render("  history · working tree")
+			mid := mutedStyle.Render("  history › working tree")
 			return left + mid + "  " + headingStyle.Render("uncommitted changes")
 		}
 		c := m.scopeCommit
@@ -241,7 +244,7 @@ func (m model) headerView() string {
 		if c != nil {
 			sha, subject = c.Short, c.Subject
 		}
-		mid := mutedStyle.Render(fmt.Sprintf("  history · commit %s", sha))
+		mid := mutedStyle.Render(fmt.Sprintf("  history › commit %s", sha))
 		return left + mid + "  " + headingStyle.Render(subject)
 	}
 	base := m.baseDisplay()
@@ -252,7 +255,9 @@ func (m model) headerView() string {
 	// bright text, an arrow, then the base branch as a blue pill (tagged "default"
 	// when it's the repo default master/main), so it's never ambiguous what the
 	// diff is measured against.
-	mid := "  " + branchStyle.Render(branchLabel(m.branch))
+	// The history view is this one's parent (Esc returns there), so it leads the
+	// breadcrumb like it does for the drill-ins.
+	mid := mutedStyle.Render("  history › ") + branchStyle.Render(branchLabel(m.branch))
 	mid += mutedStyle.Render(" → ")
 	mid += baseBadgeStyle.Render(" " + base + " ")
 	if m.baseIsDefault {
@@ -810,7 +815,7 @@ func (m model) diffView(width int) string {
 	// folder shows a roll-up, and an empty tree shows a hint. Body lines are laid
 	// out at the content width so the minimap column has room on the right.
 	if f != nil {
-		title := truncatePath(f.Path, cw-2-lipgloss.Width(m.splitTag())) + m.splitTag()
+		title := truncatePath(f.Path, m.titleBudget(cw)) + m.splitTag()
 		return m.diffPane(width, title, m.diffWindow(cw, rows))
 	}
 	title, body := m.noFileSelection(cw)
@@ -823,27 +828,62 @@ func (m model) commitDiffView(width int) string {
 	rows := m.diffViewportHeight()
 	cw := width - m.minimapW(width)
 	if r := m.selectionRange(); r != nil {
-		title := truncateText(r.label(), cw-2-lipgloss.Width(m.splitTag())) + m.splitTag()
+		title := truncateText(r.label(), m.titleBudget(cw)) + m.splitTag()
 		return m.diffPane(width, title, m.diffWindow(cw, rows))
 	}
 	if m.onWorkingRow() {
-		title := truncateText("working tree · uncommitted changes", cw-2-lipgloss.Width(m.splitTag())) + m.splitTag()
+		title := truncateText("working tree · uncommitted changes", m.titleBudget(cw)) + m.splitTag()
 		return m.diffPane(width, title, m.diffWindow(cw, rows))
 	}
 	c := m.selectedCommit()
 	if c == nil {
 		return m.diffPane(width, "commit", []string{mutedStyle.Render("  No commit selected.")})
 	}
-	title := truncateText(c.Short+"  "+c.Subject, cw-2-lipgloss.Width(m.splitTag())) + m.splitTag()
+	title := truncateText(c.Short+"  "+c.Subject, m.titleBudget(cw)) + m.splitTag()
 	return m.diffPane(width, title, m.diffWindow(cw, rows))
 }
 
-// splitTag is the " [split]" badge appended to a diff-pane title in split mode.
+// splitTag is the badges appended to a diff-pane title for the active display
+// toggles: " [split]", " [wrap]", and " [-w]" when whitespace is ignored.
 func (m model) splitTag() string {
+	tag := ""
 	if m.splitView {
-		return " [split]"
+		tag += " [split]"
 	}
-	return ""
+	if m.wrap {
+		tag += " [wrap]"
+	}
+	if m.ignoreWS {
+		tag += " [-w]"
+	}
+	return tag
+}
+
+// posW is the column budget reserved at the right of the diff-pane heading for
+// the reading position (" 100%").
+const posW = 5
+
+// titleBudget is how wide a diff-pane title may be at content width cw, leaving
+// room for the focus bar, the toggle badges, and the reading position.
+func (m model) titleBudget(cw int) int {
+	return cw - 2 - lipgloss.Width(m.splitTag()) - posW
+}
+
+// diffPosition is the cursor's place in the diff as vim's ruler shows it: Top,
+// Bot, All (the whole diff fits), or a percentage.
+func (m model) diffPosition() string {
+	total := m.totalDiffRows()
+	switch {
+	case total == 0:
+		return ""
+	case total <= m.diffViewportHeight() && !m.wrap:
+		return "All"
+	case m.diffCursor <= 0:
+		return "Top"
+	case m.diffCursor >= total-1:
+		return "Bot"
+	}
+	return fmt.Sprintf("%d%%", (m.diffCursor+1)*100/total)
 }
 
 // diffPane lays out the right pane: a focus-aware heading, the body lines, blank
@@ -862,7 +902,13 @@ func (m model) diffPane(width int, title string, lines []string) string {
 	}
 
 	var b strings.Builder
-	b.WriteString(m.paneHeading(title, focusDiff))
+	heading := m.paneHeading(title, focusDiff)
+	if pos := m.diffPosition(); pos != "" {
+		if gap := contentW - lipgloss.Width(heading) - lipgloss.Width(pos) - 1; gap >= 1 {
+			heading += strings.Repeat(" ", gap) + mutedStyle.Render(pos)
+		}
+	}
+	b.WriteString(heading)
 	b.WriteString("\n")
 	for i := 0; i < rows; i++ {
 		line := ""
@@ -902,6 +948,9 @@ func (m model) diffWindow(width, rows int) []string {
 	cursor := m.diffCursor
 	if m.focus != focusDiff {
 		cursor = -1 // only mark the cursor row while the diff pane has focus
+	}
+	if m.wrap {
+		return m.diffWindowWrapped(width, rows, cursor)
 	}
 	if m.splitView {
 		leftW := (width - 1) / 2
@@ -1038,6 +1087,13 @@ func lineStyles(kind diff.Kind) (num lipgloss.Style, bg, emphBg color.Color, mar
 // raw text) are painted with emphBg instead — the stronger word-level tint that
 // marks exactly what changed within the line.
 func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg, emphBg color.Color, emph, search [][2]int, searchCur bool) string {
+	return m.renderCodeAt(text, lexer, width, m.diffHOffset, true, bg, emphBg, emph, search, searchCur)
+}
+
+// renderCodeAt is renderCode starting hoff display columns into the line. With
+// ellipsis, a line that overflows ends in "…"; without it (soft-wrap, where the
+// rest continues on the next row) it is cut clean at the edge.
+func (m model) renderCodeAt(text string, lexer chroma.Lexer, width, hoff int, ellipsis bool, bg, emphBg color.Color, emph, search [][2]int, searchCur bool) string {
 	if width <= 0 {
 		return ""
 	}
@@ -1071,9 +1127,8 @@ func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg, emphBg
 	b.WriteString(base.Render(" ")) // left padding, matching the gutter space
 	used++
 
-	hoff := m.diffHOffset // horizontal scroll: columns dropped off the left edge
-	vcol := 0             // display column in the (unscrolled) code body
-	ri := 0               // rune offset into the expanded text, to index the masks
+	vcol := 0 // display column in the (unscrolled) code body; hoff columns are dropped off the left edge
+	ri := 0   // rune offset into the expanded text, to index the masks
 	for _, sp := range m.highlight(lexer, expanded) {
 		runes := []rune(sp.text)
 		k := 0
@@ -1119,7 +1174,14 @@ func (m model) renderCode(text string, lexer chroma.Lexer, width int, bg, emphBg
 				k = j
 				continue
 			}
-			// Doesn't fit: cut leaving one column for the ellipsis, then stop.
+			// Doesn't fit: cut (leaving one column for the ellipsis), then stop.
+			if !ellipsis {
+				cut := cutToWidth(seg, remaining)
+				b.WriteString(st.Render(cut))
+				used += lipgloss.Width(cut)
+				ri = -1
+				break
+			}
 			cut := cutToWidth(seg, remaining-1)
 			b.WriteString(st.Render(cut))
 			b.WriteString(base.Render("…"))
@@ -1335,115 +1397,219 @@ func (m model) footerView() string {
 	if m.flash != "" {
 		return selectedStyle.Render(m.flash)
 	}
-	var keys []string
+
+	// Status ahead of the hints: a half-typed count or chord (like vim's showcmd),
+	// then a committed search's position so the reader knows where n/N will land.
+	var status []string
+	if pending := m.count + m.pendingBracket; pending != "" || m.pendingG {
+		if m.pendingG {
+			pending += "g"
+		}
+		status = append(status, pending+"…")
+	}
+	if m.searchQuery != "" {
+		st := "/" + m.searchQuery + " "
+		if len(m.searchHits) == 0 {
+			st += "no matches"
+		} else {
+			st += fmt.Sprintf("%d/%d", m.searchIdx+1, len(m.searchHits))
+		}
+		status = append(status, st+" · esc clear")
+	}
+	return fitFooter(status, m.footerHints(), m.width)
+}
+
+// footerHints is the current mode's keybinding hints, most important first: the
+// footer keeps as many as fit and drops the rest (help lists everything), so
+// `? help` leads and is never the one cut off.
+func (m model) footerHints() []string {
 	switch m.mode {
 	case viewOverview:
-		keys = []string{
-			"j/k select author", "↵ open contributor", "1-5 / [ ] range", "S/esc back", "t theme", "? help", "q quit",
-		}
-		return mutedStyle.Render(strings.Join(keys, "  ·  "))
+		return []string{"? help", "j/k select author", "↵ open contributor", "1-5 / [ ] range", "S/esc back", "t theme", "q quit"}
 	case viewAuthorDetail:
-		keys = []string{
-			"esc back", "1-5 / [ ] range", "S/L history", "t theme", "? help", "q quit",
-		}
-		return mutedStyle.Render(strings.Join(keys, "  ·  "))
+		return []string{"? help", "esc back", "1-5 / [ ] range", "S/L history", "t theme", "q quit"}
 	case viewLog:
 		if m.logVisual {
-			keys = []string{"j/k extend", "Tab diff", "↵ open range", "v/esc cancel", "? help", "q quit"}
-			break
+			return []string{"? help", "j/k extend", "Tab diff", "↵ open range", "v/esc cancel", "q quit"}
 		}
+		keys := []string{"? help", "j/k select", "↵ open commit"}
 		if m.logDiffOpen {
-			keys = []string{"j/k select", "h/l scroll", "Tab hide diff", "↵ open commit"}
+			keys = append(keys, "]c/[c change", "J/K file", "h/Tab hide diff")
 		} else {
-			keys = []string{"j/k select", "Tab diff", "↵ open commit"}
+			keys = append(keys, "Tab diff")
 		}
 		if !m.onBaseBranch() {
 			keys = append(keys, "D "+m.branchDiffLabel())
 		}
-		keys = append(keys, "v select range", "d details", "b branch", "S stats", "t theme", "⌕ ctrl+k search", "? help", "q quit")
-	case viewCommit:
-		keys = []string{
-			"j/k move", "Tab ⇄ pane", "h/l scroll", "f find", "/ search", "[ ] sidebar", "s split", "t theme", "⌕ ctrl+k search", "esc back", "? help", "q quit",
-		}
-	default:
-		keys = []string{
-			"j/k move", "Tab ⇄ pane", "h/l scroll", "↵ open/expand", "f find", "/ search", "[ ] sidebar", "s split", "t theme", "⌕ ctrl+k search", "L history", "? help", "q quit",
-		}
+		return append(keys, "v select range", "d details", "b branch", "y copy sha", "S stats",
+			"ctrl+k search", ": commands", "t theme", "q quit")
 	}
-	footer := mutedStyle.Render(strings.Join(keys, "  ·  "))
-	// A committed query shows its match position (or "no matches") ahead of the
-	// keybindings so the reader knows where n/N will land.
-	if m.searchQuery != "" {
-		status := "/" + m.searchQuery + " "
-		if len(m.searchHits) == 0 {
-			status += "no matches"
-		} else {
-			status += fmt.Sprintf("%d/%d", m.searchIdx+1, len(m.searchHits))
-		}
-		footer = selectedStyle.Render(status) + mutedStyle.Render("  ·  ") + footer
+	keys := []string{"? help", "j/k move", "Tab ⇄ pane", "J/K file", "]c/[c change", "/ search", "f find", "e edit"}
+	if m.mode == viewCommit {
+		keys = append(keys, "esc back")
+	} else {
+		keys = append(keys, "esc history")
 	}
-	return footer
+	keys = append(keys, "s split", "w wrap", "W whitespace", "< > sidebar", "y copy", "ctrl+k search", ": commands", "t theme", "q quit")
+	if !m.wrap {
+		keys = append(keys, "h/l scroll")
+	}
+	return keys
 }
 
-func (m model) helpBox() string {
-	lines := []string{
-		titleStyle.Render("diffcat — vim keybindings"),
-		"",
-		headingStyle.Render("  panes"),
-		"  Tab          switch focus between file list / diff pane",
-		"  h / l        scroll the diff left / right (for long lines)",
-		"  Enter / o    open file's diff / expand context",
-		"  f            fuzzy-jump to a changed file by name",
-		"  e            open the file under the cursor in $EDITOR, at that line",
-		"  [ / ]        collapse / widen the sidebar (full-width diff ↔ wide list)",
-		"",
-		headingStyle.Render("  motions (act on the focused pane)"),
-		"  j / k        move cursor down / up one line",
-		"  gg / G       jump to top / bottom",
-		"  ctrl+d / u   half page down / up",
-		"  ctrl+f / b   full page down / up",
-		"",
-		headingStyle.Render("  diff"),
-		"  ↵ / o on  ↕  expand hidden context (↓ below, ↑ above)",
-		"  /            search the open diff (n / N jump between matches)",
-		"",
-		headingStyle.Render("  history (the default view)"),
+// fitFooter joins the status segments and as many hints as fit in width columns,
+// in order, dropping the tail rather than letting the line be cut mid-hint.
+func fitFooter(status, hints []string, width int) string {
+	const sep = "  ·  "
+	var b strings.Builder
+	used := 0
+	for _, s := range status {
+		if used > 0 {
+			b.WriteString(mutedStyle.Render(sep))
+			used += len(sep)
+		}
+		b.WriteString(selectedStyle.Render(s))
+		used += lipgloss.Width(s)
+	}
+	for _, h := range hints {
+		w := lipgloss.Width(h)
+		if used > 0 {
+			w += lipgloss.Width(sep)
+		}
+		if used+w > width {
+			break
+		}
+		if used > 0 {
+			b.WriteString(mutedStyle.Render(sep))
+		}
+		b.WriteString(mutedStyle.Render(h))
+		used += w
+	}
+	return b.String()
+}
+
+// helpSection is one titled block of the help overlay. modes lists the views it
+// is about, so the current view's section can be listed first.
+type helpSection struct {
+	title string
+	modes []viewMode
+	lines []string
+}
+
+// helpSections is the full keybinding reference.
+func (m model) helpSections() []helpSection {
+	history := []string{
 		"  j / k        move between entries (the list fills the screen)",
-		"  Tab          toggle the selected diff on the right half on / off",
+		"  Tab / l      show the selected diff on the right half",
+		"  h / Tab      hide it again (h at the left edge)",
 		"  Enter        open the commit's (or working tree's) files",
+		"  ]c / [c      next / previous change in the diff",
+		"  J / K        next / previous file in the diff (also ]f / [f)",
 		"  v / V        visual-select a range of commits; j/k extend it, Tab",
 		"               previews and Enter opens their net diff (latest wins)",
 		"  d            inspect the selected commit (author, date, full message)",
+		"  y            copy the selected commit's SHA",
 		"  b            switch branch — fuzzy-pick one and check it out",
-		"  S            whole-repo Stats — commit count + per-author ranking",
-		"  1 … 5        in Stats: time window — week / month / 6 months / year / all",
-		"  [ / ]        in Stats: narrow / widen that window",
+		"  S            whole-repo Stats",
 		"  ○ local      the working tree: staged + unstaged changes",
-		"  L            return to the history view from anywhere",
 		"  Esc          leave visual, close the diff pane, then step back",
-		"",
-		headingStyle.Render("  branch diff"),
 	}
-	// On the base branch the branch diff is degenerate, so "D" is hidden in the
-	// footer; mirror that here rather than advertise a key that shows nothing.
 	if !m.onBaseBranch() {
-		label := m.branchDiffLabel()
-		lines = append(lines, "  D            aggregated "+label+" (file tree + diff)")
+		history = append(history, "  D            aggregated "+m.branchDiffLabel()+" (file tree + diff)")
 	}
-	lines = append(lines,
-		"",
-		headingStyle.Render("  commands"),
-		"  ctrl+k       global search — commits · files · code",
-		"  :            command palette — fuzzy-run any action",
-		"",
-		headingStyle.Render("  view"),
-		"  s            toggle unified / side-by-side",
-		"  t            choose theme (colors · light/dark · icons · motion)",
-		"  r            refresh from disk (also auto-syncs in the background)",
-		"  ? / q        toggle help / quit",
-		"",
-		mutedStyle.Render("  press any key to dismiss"),
-	)
+	return []helpSection{
+		{title: "history (the default view)", modes: []viewMode{viewLog}, lines: history},
+		{title: "files & diff", modes: []viewMode{viewBranch, viewCommit}, lines: []string{
+			"  Tab          switch focus between file list / diff pane",
+			"  Enter / o    focus the diff (it previews as you move) · on ↕ expand",
+			"               hidden context (↓ below, ↑ above)",
+			"  J / K        next / previous file (also ]f / [f)",
+			"  ]c / [c      next / previous change",
+			"  f            fuzzy-jump to a changed file by name",
+			"  /            search the diff — n / N next / previous match, Esc clears",
+			"  h / l        scroll long lines left / right (when not wrapping)",
+			"  e            open the file in your editor at the cursor line",
+			"  y            copy the file path (path:line from the diff pane)",
+			"  < / >        narrow / widen the sidebar (full-width diff ↔ wide list)",
+			"  Esc          back to where you came from",
+			"  L            history, from anywhere",
+		}},
+		{title: "motions (act on the focused pane)", lines: []string{
+			"  j / k        move cursor down / up one line",
+			"  gg / G       jump to top / bottom",
+			"  ctrl+d / u   half page down / up",
+			"  ctrl+f / b   full page down / up",
+			"  5j  42G      a count repeats a motion; with G or gg, go to line",
+			"  mouse wheel  scroll the pane under the pointer",
+			"               (hold shift — or option in iTerm — to select text)",
+		}},
+		{title: "stats", modes: []viewMode{viewOverview, viewAuthorDetail}, lines: []string{
+			"  j / k        select a contributor",
+			"  Enter        open the contributor's page",
+			"  1 … 5        time window — week / month / 6 months / year / all",
+			"  [ / ]        narrow / widen that window",
+			"  S / Esc      back to history",
+		}},
+		{title: "view", lines: []string{
+			"  s            toggle unified / side-by-side",
+			"  w            toggle soft-wrap for long lines",
+			"  W            toggle hiding whitespace-only changes (git diff -w)",
+			"  t            choose theme (colors · light/dark · icons · motion)",
+			"  r            refresh from disk (also auto-syncs in the background)",
+		}},
+		{title: "commands", lines: []string{
+			"  ctrl+k       global search — commits · files · code",
+			"  :            command palette — fuzzy-run any action",
+			"  ?            this help",
+			"  q            quit",
+		}},
+	}
+}
+
+// helpLines is the help overlay's scrollable body: the current view's section
+// first, then the rest in their usual order.
+func (m model) helpLines() []string {
+	var first, rest []string
+	for _, sec := range m.helpSections() {
+		block := append([]string{headingStyle.Render("  " + sec.title)}, sec.lines...)
+		block = append(block, "")
+		mine := false
+		for _, md := range sec.modes {
+			mine = mine || md == m.mode
+		}
+		if mine {
+			first = append(first, block...)
+		} else {
+			rest = append(rest, block...)
+		}
+	}
+	lines := append(first, rest...)
+	return lines[:len(lines)-1] // drop the trailing blank
+}
+
+// helpBodyRows is how many body lines the help overlay shows at once: the screen
+// less the box chrome (border + padding = 4 rows), the title and hint lines with
+// their spacers (4 rows), and a row of breathing room above and below.
+func (m model) helpBodyRows() int {
+	return max(1, min(len(m.helpLines()), m.height-10))
+}
+
+// scrollHelp moves the help overlay's window by delta lines, clamped.
+func (m *model) scrollHelp(delta int) {
+	m.helpScroll = max(0, min(m.helpScroll+delta, len(m.helpLines())-m.helpBodyRows()))
+}
+
+func (m model) helpBox() string {
+	body := m.helpLines()
+	rows := m.helpBodyRows()
+	off := max(0, min(m.helpScroll, len(body)-rows))
+	hint := "press ? or esc to close"
+	if len(body) > rows {
+		hint = fmt.Sprintf("j/k scroll · %d–%d of %d · ? or esc to close", off+1, off+rows, len(body))
+	}
+	lines := []string{titleStyle.Render("diffcat — vim keybindings"), ""}
+	lines = append(lines, body[off:off+rows]...)
+	lines = append(lines, "", mutedStyle.Render("  "+hint))
 	return floatingBox(strings.Join(lines, "\n"))
 }
 

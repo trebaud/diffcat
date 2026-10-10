@@ -65,8 +65,8 @@ func saveState(st userState) error {
 	return os.WriteFile(p, b, 0o644)
 }
 
-// markFirstRunDone records that the one-time onboarding hint has been shown, so
-// it never appears again. Best-effort.
+// markFirstRunDone records that the reader has opened help, so the first-run hint
+// stops appearing on launch. Best-effort.
 func markFirstRunDone(repo string) {
 	st := loadState()
 	st.FirstRunDone = true

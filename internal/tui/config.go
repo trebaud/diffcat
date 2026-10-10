@@ -22,6 +22,12 @@ type userConfig struct {
 	Icons        string `json:"icons,omitempty"`
 	ReduceMotion bool   `json:"reduceMotion,omitempty"`
 	Dark         *bool  `json:"dark,omitempty"`
+	// Layout preferences remembered from the last session: side-by-side diffs
+	// (`s`), soft-wrapped long lines (`w`), and the sidebar width (`<` / `>`:
+	// "hidden", "normal", or "wide").
+	Split   bool   `json:"split,omitempty"`
+	Wrap    bool   `json:"wrap,omitempty"`
+	Sidebar string `json:"sidebar,omitempty"`
 }
 
 // Options carries the raw command-line flag values into Run; empty strings mean
@@ -42,6 +48,9 @@ type resolved struct {
 	reduceMotion bool
 	dark         bool
 	editor       string
+	split        bool
+	wrap         bool
+	sidebar      sidebarSize
 }
 
 // configPath returns the preference file location, following the XDG Base
@@ -131,7 +140,24 @@ func resolveOptions(o Options, cfg userConfig) resolved {
 	} else {
 		r.dark = detectDark()
 	}
+
+	r.split, r.wrap = cfg.Split, cfg.Wrap
+	r.sidebar = parseSidebar(cfg.Sidebar)
 	return r
+}
+
+// sidebarNames maps each sidebar size to its config spelling, indexed by size.
+var sidebarNames = []string{"hidden", "normal", "wide"}
+
+// parseSidebar reads a saved sidebar size, defaulting to normal for an empty or
+// unknown value.
+func parseSidebar(s string) sidebarSize {
+	for i, n := range sidebarNames {
+		if n == s {
+			return sidebarSize(i)
+		}
+	}
+	return sidebarNormal
 }
 
 func detectDark() bool { return lipgloss.HasDarkBackground(os.Stdin, os.Stdout) }
