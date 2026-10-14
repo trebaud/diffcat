@@ -341,10 +341,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, repaint
 
 	case tea.KeyPressMsg:
+		m.sel = nil
 		return m.handleKey(msg)
 
 	case tea.MouseWheelMsg:
+		m.sel = nil
 		return m.handleWheel(msg)
+
+	case tea.MouseClickMsg:
+		return m.handleMouseClick(msg)
+
+	case tea.MouseMotionMsg:
+		return m.handleMouseMotion(msg)
+
+	case tea.MouseReleaseMsg:
+		return m.handleMouseRelease(msg)
 	}
 	return m, nil
 }
@@ -1127,7 +1138,8 @@ func (m model) persistPrefs() {
 	cfg.ReduceMotion = m.reduceMotion
 	cfg.Dark = &dark
 	cfg.Split = m.splitView
-	cfg.Wrap = m.wrap
+	wrap := m.wrap
+	cfg.Wrap = &wrap
 	cfg.Sidebar = sidebarNames[m.sidebar]
 	_ = saveConfig(cfg)
 }

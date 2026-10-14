@@ -255,6 +255,8 @@ type model struct {
 	// timer, so it survives reduce-motion (where there is no tick to age it out).
 	editor string
 	flash  string
+	// sel is the mouse text selection, nil when nothing is selected.
+	sel *mouseSel
 
 	// Command palette (`:`). showPalette gates the floating action picker;
 	// paletteInput is the fuzzy query and paletteSel the highlighted action.

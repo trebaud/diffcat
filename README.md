@@ -102,7 +102,7 @@ It's vim unless you say otherwise. Name another in
 ```
 
 Layout choices are remembered there too: side-by-side (`"split": true`),
-soft-wrap (`"wrap": true`), and the sidebar width (`"sidebar"`: `"hidden"`,
+soft-wrap (on by default; `"wrap": false` turns it off), and the sidebar width (`"sidebar"`: `"hidden"`,
 `"normal"`, or `"wide"`, set with `<` / `>` in the TUI).
 
 The editor value is a command, so flags are fine (`"code -w"`, `"emacsclient -nw"`).

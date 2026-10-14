@@ -23,10 +23,10 @@ type userConfig struct {
 	ReduceMotion bool   `json:"reduceMotion,omitempty"`
 	Dark         *bool  `json:"dark,omitempty"`
 	// Layout preferences remembered from the last session: side-by-side diffs
-	// (`s`), soft-wrapped long lines (`w`), and the sidebar width (`<` / `>`:
-	// "hidden", "normal", or "wide").
+	// (`s`), soft-wrapped long lines (`w`, on unless turned off), and the sidebar
+	// width (`<` / `>`: "hidden", "normal", or "wide").
 	Split   bool   `json:"split,omitempty"`
-	Wrap    bool   `json:"wrap,omitempty"`
+	Wrap    *bool  `json:"wrap,omitempty"`
 	Sidebar string `json:"sidebar,omitempty"`
 }
 
@@ -141,7 +141,8 @@ func resolveOptions(o Options, cfg userConfig) resolved {
 		r.dark = detectDark()
 	}
 
-	r.split, r.wrap = cfg.Split, cfg.Wrap
+	r.split = cfg.Split
+	r.wrap = cfg.Wrap == nil || *cfg.Wrap
 	r.sidebar = parseSidebar(cfg.Sidebar)
 	return r
 }

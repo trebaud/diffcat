@@ -25,8 +25,8 @@ func (m model) View() tea.View {
 	// the whole screen light (nil in dark mode = keep the terminal's own colors).
 	v.BackgroundColor = colCanvas
 	v.ForegroundColor = colText
-	// Wheel events scroll the pane under the pointer. Most terminals still select
-	// text with shift (option in iTerm) held while dragging.
+	// Wheel events scroll the pane under the pointer; a left-drag selects text
+	// within one pane (selection.go).
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
 }
@@ -51,18 +51,7 @@ func (m model) render() string {
 		return m.tooSmallView()
 	}
 
-	// The overview dashboard and a contributor's detail page are single full-width
-	// panes, not the two-pane split; everything else is the header/body/footer
-	// split built by twoPaneScreen.
-	var screen string
-	switch m.mode {
-	case viewOverview:
-		screen = m.overviewView()
-	case viewAuthorDetail:
-		screen = m.authorDetailView()
-	default:
-		screen = m.twoPaneScreen()
-	}
+	screen := m.baseScreen()
 
 	// Overlays float above the dimmed screen rather than replacing it, so the
 	// reader keeps their place in the background.
@@ -82,7 +71,23 @@ func (m model) render() string {
 	case m.showGlobalSearch:
 		return m.floatOverlay(screen, m.globalSearchBox())
 	}
+	if m.sel != nil {
+		return m.drawSelection(screen)
+	}
 	return screen
+}
+
+// baseScreen is the screen beneath any overlay. The overview dashboard and a
+// contributor's detail page are single full-width panes, not the two-pane
+// split; everything else is the header/body/footer split built by twoPaneScreen.
+func (m model) baseScreen() string {
+	switch m.mode {
+	case viewOverview:
+		return m.overviewView()
+	case viewAuthorDetail:
+		return m.authorDetailView()
+	}
+	return m.twoPaneScreen()
 }
 
 // twoPaneScreen builds the standard header/body/footer screen for the file-tree
@@ -1419,42 +1424,32 @@ func (m model) footerView() string {
 	return fitFooter(status, m.footerHints(), m.width)
 }
 
-// footerHints is the current mode's keybinding hints, most important first: the
-// footer keeps as many as fit and drops the rest (help lists everything), so
-// `? help` leads and is never the one cut off.
+// footerHints is the current mode's essential keybindings, `? help` first; the
+// help overlay lists everything else. fitFooter still drops the tail on a narrow
+// terminal.
 func (m model) footerHints() []string {
 	switch m.mode {
 	case viewOverview:
-		return []string{"? help", "j/k select author", "↵ open contributor", "1-5 / [ ] range", "S/esc back", "t theme", "q quit"}
+		return []string{"? help", "j/k select", "↵ open", "esc back", "q quit"}
 	case viewAuthorDetail:
-		return []string{"? help", "esc back", "1-5 / [ ] range", "S/L history", "t theme", "q quit"}
+		return []string{"? help", "1-5 range", "esc back", "q quit"}
 	case viewLog:
 		if m.logVisual {
-			return []string{"? help", "j/k extend", "Tab diff", "↵ open range", "v/esc cancel", "q quit"}
+			return []string{"? help", "j/k extend", "↵ open range", "esc cancel", "q quit"}
 		}
-		keys := []string{"? help", "j/k select", "↵ open commit"}
+		keys := []string{"? help", "j/k select", "↵ open"}
 		if m.logDiffOpen {
-			keys = append(keys, "]c/[c change", "J/K file", "h/Tab hide diff")
+			keys = append(keys, "Tab hide diff")
 		} else {
 			keys = append(keys, "Tab diff")
 		}
-		if !m.onBaseBranch() {
-			keys = append(keys, "D "+m.branchDiffLabel())
-		}
-		return append(keys, "v select range", "d details", "b branch", "y copy sha", "S stats",
-			"ctrl+k search", ": commands", "t theme", "q quit")
+		return append(keys, "ctrl+k search", "q quit")
 	}
-	keys := []string{"? help", "j/k move", "Tab ⇄ pane", "J/K file", "]c/[c change", "/ search", "f find", "e edit"}
+	back := "esc history"
 	if m.mode == viewCommit {
-		keys = append(keys, "esc back")
-	} else {
-		keys = append(keys, "esc history")
+		back = "esc back"
 	}
-	keys = append(keys, "s split", "w wrap", "W whitespace", "< > sidebar", "y copy", "ctrl+k search", ": commands", "t theme", "q quit")
-	if !m.wrap {
-		keys = append(keys, "h/l scroll")
-	}
-	return keys
+	return []string{"? help", "j/k move", "Tab ⇄ pane", "]c/[c change", "/ search", back, "q quit"}
 }
 
 // fitFooter joins the status segments and as many hints as fit in width columns,
@@ -1541,6 +1536,7 @@ func (m model) helpSections() []helpSection {
 			"  ctrl+f / b   full page down / up",
 			"  5j  42G      a count repeats a motion; with G or gg, go to line",
 			"  mouse wheel  scroll the pane under the pointer",
+			"  mouse drag   select text within one pane (copied on release)",
 			"               (hold shift — or option in iTerm — to select text)",
 		}},
 		{title: "stats", modes: []viewMode{viewOverview, viewAuthorDetail}, lines: []string{
